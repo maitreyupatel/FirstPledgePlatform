@@ -1,0 +1,96 @@
+1. Master Prompt: Global Design System (The "DNA")
+"We need to refine our core design system. The goal is 'articulate trust,' not 'generic tech.' It needs to feel less like a template and more like a bespoke, high-end instrument."
+
+Refine Typography:
+
+Font: The current font is thin and lacks presence. Implement Inter or Satoshi as the global font.
+
+Hierarchy: Create a more articulate typographic scale. Headings (like "All-Purpose Cleaning Spray") must have more presence and authority (try a heavier weight, like 600 or 700). Body copy must be perfectly readable (size 16px, line-height 1.6).
+
+Refine Color Palette:
+
+Action Color: The current "Buy" green is too aggressive. We need a more sophisticated, "trustworthy" green. Let's call it brand-green-primary.
+
+State Colors: The "Caution" yellow is jarring. We will replace it.
+
+status-safe: A gentle, muted green (e.g., text-green-700 in a bg-green-50 pill).
+
+status-caution: A premium, muted amber or orange (e.g., text-amber-700 in a bg-amber-50 pill). Not a harsh warning, but a thoughtful advisory.
+
+status-banned: A deep, serious, muted red.
+
+Refine Iconography:
+
+The shield and caution triangle icons are generic. Replace them with a custom, pixel-perfect set. They must be line-art, slightly rounded, and feel like they belong to the FirstPledge brand.
+
+2. Master Prompt: Homepage Redesign (The "First Impression")
+"The Homepage Hero is our promise. It must be emotional, not clinical."
+
+Rethink the Hero Image:
+
+The "beakers" image (image bf047e.jpg) is a mistake. It says "cold lab," not "safety" or "care."
+
+Replace it with an aspirational, emotional image that represents the outcome of trust. Think: A beautiful, soft-focus shot of natural, raw ingredients (like honey, oats, lavender). Or a macro shot of a single, perfect leaf. It must be organic and warm.
+
+Refine the Hero Text:
+
+"Trust Through Transparency" is strong. Keep it.
+
+The subtext ("Instant, authoritative clarity...") is generic tech-speak. Simplify it.
+
+New Subtext: "We analyze every ingredient, so you don't have to. Welcome to the FirstPledge standard." It's human.
+
+Refine the Product Grid:
+
+This is your best-looking component. It just needs refinement.
+
+Add Whitespace: Increase the gap in the grid. Give the products "room to breathe."
+
+Refine the Card: The "View Report" link is weak.
+
+New Card Footer: Make the entire card clickable, but also add a "View Report" link with a clean right-arrow icon (→) for a clearer call to action.
+
+3. Master Prompt: Product Page Redesign (The "Core Experience")
+"This page is failing. It prioritizes the affiliate link over the trust report. We must reverse this. The report is the hero, not the button."
+
+Re-architect the Page Layout:
+
+The "Buy on Amazon" button is too high. It distracts from the report.
+
+New Layout Order:
+
+Product Image
+
+Product Name & Brand
+
+New: "Safety Meter" (see below)
+
+Safety Summary
+
+"Ingredient Evidence" (The List)
+
+"Buy on Amazon" Button (Moved to the BOTTOM)
+
+The "Buy" button is the consequence of earning their trust. It must come after we show our work.
+
+Change the "Buy on Amazon" button to a secondary "ghost" style (e.g., border-green-primary text-green-primary) to be less aggressive.
+
+Create a "Safety Meter" Component:
+
+The "5 Safe, 3 Caution, 0 Banned" numbers are data, not information. They lack impact.
+
+New Component: Create a "Safety Meter." This should be a horizontal, segmented bar graph.
+
+Example: A bar [ Safe (5) | Caution (3) | Banned (0) ] with colors. It's an instant visual summary of the product's DNA.
+
+Refine the "Ingredient Evidence" Accordion:
+
+This is the core of our IP. It must feel premium.
+
+Add Padding: Add generous padding inside each accordion item.
+
+Refine the States: Replace the generic yellow "Caution" tag with our new status-caution pill (the muted amber).
+
+Improve Typography: The "SOURCE" link is too small. Make it a clear, clickable link: "View Research Citation ↗".
+
+Add Interaction: When an item is expanded, it should have a subtle background color change to show it's "active."

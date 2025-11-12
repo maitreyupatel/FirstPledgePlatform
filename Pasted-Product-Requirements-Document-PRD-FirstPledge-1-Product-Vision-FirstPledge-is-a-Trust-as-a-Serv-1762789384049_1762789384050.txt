@@ -1,0 +1,71 @@
+Product Requirements Document (PRD): FirstPledge
+1. Product Vision
+FirstPledge is a "Trust-as-a-Service" platform that vets general consumer products (skincare, food, cleaning supplies). It uses an AI-powered research engine to analyze ingredient lists against recognized safety standards, enabling a human "Editor-in-Chief" to rapidly review and publish trusted, evidence-backed Safety Reports for the public.
+
+Core Value Proposition
+For Consumers: Instant, authoritative clarity on product safety, backed by transparent, clickable evidence (citations).
+
+For the Admin: A 10x faster research workflow. The AI acts as a junior researcher, proposing complete reports in seconds for final human approval.
+
+2. Core User Flows
+Flow A: The Admin (Editor-in-Chief)
+Input: Admin accesses a private dashboard and provides product details (Name, Brand, Image URL, Affiliate Link) and a raw, unformatted list of ingredients.
+
+AI Research: Admin initiates the "Vetting Engine." The system autonomously researches every ingredient, determining its safety status and finding a credible source citation.
+
+Editorial Review: Admin reviews the AI-generated "Proposed Report." They can manually override any rating, edit the summary for tone, or add missing details.
+
+Publish: Admin approves the report, making it instantly live for public viewing.
+
+Flow B: The Consumer (Public User)
+Discovery: User lands on a visually clean homepage showing a grid of recently vetted products with clear "Safe/Caution" badges.
+
+Verification: User clicks a product to view the full Safety Report.
+
+Trust Building: User explores the "Evidence" section—an interactive list where they can expand any ingredient to see why it received its rating and click the link to the original research source.
+
+Action: User clicks a prominent "Buy on Amazon" button to purchase the vetted product.
+
+3. Key Functional Requirements
+3.1 AI Vetting Engine (The Core IP)
+The system needs an autonomous "Research Agent" that can:
+
+Parse raw, messy ingredient text into a structured list.
+
+Check Memory: Recognize if an ingredient has been vetted before to avoid re-researching it.
+
+Perform Research: If an ingredient is new, use external search tools to find credible safety information (e.g., toxicity reports, regulatory databases).
+
+Analyze & Cite: Use generative AI to read search results, assign a rating (Safe, Caution, Banned), write a one-sentence rationale, and provide a source URL.
+
+3.2 Admin Dashboard
+A private interface optimized for speed and editorial control:
+
+Simple data entry forms for new products.
+
+Interactive Proposal View: A UI that displays the AI's findings in an editable format before publishing. Toggles for status (Green/Yellow/Red) are preferred over dropdowns for speed.
+
+3.3 Public Experience (UX/UI)
+The public interface must feel premium and authoritative (similar to fintech or health-tech apps like Cred or Yuka):
+
+Visual Trust Signals: Use clear color-coding (Green Shield, Yellow Warning, Red Ban) universally.
+
+"Cred-like" Accordions: Ingredient details (rationale + citation) should be hidden behind a smooth expand/collapse interaction to keep the page clean but information-dense when needed.
+
+SEO Ready: All public product pages must have dynamic meta-titles and descriptions based on their unique content.
+
+4. Data Concepts (The "Truth")
+The system requires a persistent way to store two core types of data. The exact implementation (database vs. files) is flexible, provided it is robust and suitable for the Replit environment.
+
+Ingredient Memory: A "Master List" of every ingredient ever vetted, storing its name, assigned status, AI summary, and citation. This is our growing intellectual property.
+
+Product Reports: The final, published reports containing product metadata and the list of its specific ingredients (linked to the Ingredient Memory).
+
+5. External Toolkit (Replit Secrets)
+The Replit Agent should use these environment secrets to power the AI Vetting Engine:
+
+GOOGLE_API_KEY: For accessing Google's suite of AI and Search tools.
+
+GOOGLE_CX_ID: For using the Programmable Search Engine to find safety reports.
+
+GEMINI_API_KEY: For accessing the Generative AI model to analyze search results (if distinct from the general Google key).
