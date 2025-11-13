@@ -15,7 +15,7 @@ export default function Hero() {
       />
       <div className="absolute inset-0 bg-gradient-to-b from-black/60 via-black/50 to-black/70" />
       
-      <div className="relative z-10 container px-4 md:px-6 text-center">
+      <div className="relative z-10 container max-w-7xl mx-auto px-4 md:px-6 text-center">
         <div className="max-w-3xl mx-auto space-y-6">
           <h1 className="text-4xl md:text-5xl lg:text-6xl font-bold text-white tracking-tight">
             Trust Through Transparency

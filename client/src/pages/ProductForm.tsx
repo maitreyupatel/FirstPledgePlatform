@@ -17,6 +17,17 @@ import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Separator } from "@/components/ui/separator";
 import { Textarea } from "@/components/ui/textarea";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogTrigger,
+} from "@/components/ui/alert-dialog";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest } from "@/lib/queryClient";
 import { VetIngredientResult, SafetyStatus } from "@shared/types";
@@ -66,6 +77,8 @@ export default function ProductForm({ params }: ProductFormParams) {
 
   const [ingredients, setIngredients] = useState<IngredientInput[]>([]);
   const [ingredientsText, setIngredientsText] = useState("");
+  const [showPublishDialog, setShowPublishDialog] = useState(false);
+  const [showUnpublishDialog, setShowUnpublishDialog] = useState(false);
   const [newIngredient, setNewIngredient] = useState({
     name: "",
     status: "safe" as SafetyStatus,
@@ -244,10 +257,32 @@ export default function ProductForm({ params }: ProductFormParams) {
     saveMutation.mutate(values);
   });
 
+  const handlePublish = () => {
+    const currentValues = form.getValues();
+    if (ingredients.length === 0) {
+      toast({
+        title: "Add ingredients first",
+        description:
+          "A product report requires at least one ingredient analysis.",
+        variant: "destructive",
+      });
+      setShowPublishDialog(false);
+      return;
+    }
+    saveMutation.mutate({ ...currentValues, status: "published" });
+    setShowPublishDialog(false);
+  };
+
+  const handleUnpublish = () => {
+    const currentValues = form.getValues();
+    saveMutation.mutate({ ...currentValues, status: "draft" });
+    setShowUnpublishDialog(false);
+  };
+
   return (
     <div className="min-h-screen bg-muted/10">
       <Header showAdminLink />
-      <main className="container px-4 md:px-6 py-10 space-y-10">
+      <main className="container max-w-7xl mx-auto px-4 md:px-6 py-10 space-y-10">
         <div className="flex flex-col justify-between gap-6 lg:flex-row lg:items-center">
           <div>
             <p className="text-sm uppercase tracking-wide text-muted-foreground">
@@ -261,7 +296,7 @@ export default function ProductForm({ params }: ProductFormParams) {
               override as needed before publishing.
             </p>
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2 flex-wrap">
             <Button variant="outline" asChild>
               <Link href="/admin">
                 <span>Cancel</span>
@@ -274,6 +309,59 @@ export default function ProductForm({ params }: ProductFormParams) {
             >
               {saveMutation.isPending ? "Saving..." : "Save Product"}
             </Button>
+            {form.watch("status") === "draft" ? (
+              <AlertDialog open={showPublishDialog} onOpenChange={setShowPublishDialog}>
+                <AlertDialogTrigger asChild>
+                  <Button
+                    variant="default"
+                    disabled={saveMutation.isPending || isLoading}
+                    data-testid="button-publish-product"
+                  >
+                    Publish
+                  </Button>
+                </AlertDialogTrigger>
+                <AlertDialogContent>
+                  <AlertDialogHeader>
+                    <AlertDialogTitle>Publish Product?</AlertDialogTitle>
+                    <AlertDialogDescription>
+                      This will make the product report publicly visible. Make sure all information is accurate and complete before publishing.
+                    </AlertDialogDescription>
+                  </AlertDialogHeader>
+                  <AlertDialogFooter>
+                    <AlertDialogCancel>Cancel</AlertDialogCancel>
+                    <AlertDialogAction onClick={handlePublish}>
+                      Publish
+                    </AlertDialogAction>
+                  </AlertDialogFooter>
+                </AlertDialogContent>
+              </AlertDialog>
+            ) : (
+              <AlertDialog open={showUnpublishDialog} onOpenChange={setShowUnpublishDialog}>
+                <AlertDialogTrigger asChild>
+                  <Button
+                    variant="outline"
+                    disabled={saveMutation.isPending || isLoading}
+                    data-testid="button-unpublish-product"
+                  >
+                    Unpublish
+                  </Button>
+                </AlertDialogTrigger>
+                <AlertDialogContent>
+                  <AlertDialogHeader>
+                    <AlertDialogTitle>Unpublish Product?</AlertDialogTitle>
+                    <AlertDialogDescription>
+                      This will hide the product from public view. You can republish it later.
+                    </AlertDialogDescription>
+                  </AlertDialogHeader>
+                  <AlertDialogFooter>
+                    <AlertDialogCancel>Cancel</AlertDialogCancel>
+                    <AlertDialogAction onClick={handleUnpublish}>
+                      Unpublish
+                    </AlertDialogAction>
+                  </AlertDialogFooter>
+                </AlertDialogContent>
+              </AlertDialog>
+            )}
           </div>
         </div>
 

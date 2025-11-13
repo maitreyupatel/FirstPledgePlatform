@@ -3,6 +3,10 @@ import express from "express";
 import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import dotenv from "dotenv";
+
+// Load environment variables
+dotenv.config();
 
 import {
   VetIngredientResult,
@@ -11,12 +15,45 @@ import {
 } from "../shared/types";
 import { seedProducts } from "./seed";
 import { MemStorage } from "./storage/memStorage";
+import { buildSourceUrl as buildEwgSourceUrl } from "./utils/ewgUrlBuilder";
+import { AIVettingService } from "./services/aiVettingService";
+import { CitationService } from "./services/citationService";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const PORT = Number(process.env.PORT ?? 3000);
 const CLIENT_ORIGIN = process.env.CLIENT_ORIGIN ?? "http://localhost:5173";
+
+// Initialize AI and Citation services
+const geminiApiKey = process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY;
+const googleApiKey = process.env.GOOGLE_API_KEY;
+const googleCxId = process.env.GOOGLE_CX_ID;
+
+let aiVettingService: AIVettingService | null = null;
+let citationService: CitationService | null = null;
+
+try {
+  if (geminiApiKey) {
+    aiVettingService = new AIVettingService(geminiApiKey);
+    console.log("✅ AI Vetting Service initialized");
+  } else {
+    console.warn("⚠️  GEMINI_API_KEY not set. AI vetting will use fallback keyword matching.");
+  }
+} catch (error) {
+  console.error("❌ Failed to initialize AI Vetting Service:", error);
+}
+
+try {
+  if (googleApiKey && googleCxId) {
+    citationService = new CitationService(googleApiKey, googleCxId);
+    console.log("✅ Citation Service initialized");
+  } else {
+    console.warn("⚠️  GOOGLE_API_KEY or GOOGLE_CX_ID not set. Citation search disabled.");
+  }
+} catch (error) {
+  console.error("❌ Failed to initialize Citation Service:", error);
+}
 
 const app = express();
 const storage = new MemStorage(seedProducts);
@@ -109,7 +146,7 @@ app.post("/api/products/:id/edit", (req, res) => {
   res.status(201).json(draft);
 });
 
-app.post("/api/vet-ingredients", (req, res) => {
+app.post("/api/vet-ingredients", async (req, res) => {
   const payload = req.body as VetIngredientsRequest;
   if (!payload?.ingredientsText?.trim()) {
     res.status(400).json({ error: "ingredientsText is required" });
@@ -121,8 +158,73 @@ app.post("/api/vet-ingredients", (req, res) => {
     .map((item) => item.trim())
     .filter(Boolean);
 
-  const results: VetIngredientResult = buildVetResult(lines);
-  res.json(results);
+  if (lines.length === 0) {
+    res.status(400).json({ error: "No valid ingredients found" });
+    return;
+  }
+
+  try {
+    let results: VetIngredientResult;
+
+    if (aiVettingService) {
+      // Use real AI analysis
+      console.log(`🤖 Analyzing ${lines.length} ingredient(s) with AI...`);
+      
+      const analyses = await aiVettingService.analyzeIngredients(lines);
+      
+      // Enhance with citation search if available
+      const ingredients = await Promise.all(
+        analyses.map(async (analysis) => {
+          let sourceUrl = analysis.sourceUrl;
+          
+          // If citation service is available and URL doesn't look like a real EWG URL, try to find better citation
+          if (citationService) {
+            // Only search if the URL is a generic search URL or doesn't contain ewg.org
+            if (!sourceUrl.includes("ewg.org/skindeep/ingredients/") || sourceUrl.includes("/search/")) {
+              try {
+                const betterUrl = await citationService.findBestCitation(analysis.name);
+                sourceUrl = betterUrl;
+              } catch (error) {
+                console.error(`Error finding citation for ${analysis.name}:`, error);
+                // Keep the original URL from AI
+              }
+            }
+          }
+
+          return {
+            id: cryptoRandomId(),
+            name: analysis.name,
+            status: analysis.status,
+            rationale: analysis.rationale,
+            sourceUrl,
+            originalStatus: analysis.status,
+            isOverride: false,
+            createdAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString(),
+          };
+        })
+      );
+
+      const overallStatus = deriveOverallStatus(ingredients.map(i => i.status));
+      const summary = buildSummary(overallStatus, ingredients.length);
+
+      results = { overallStatus, summary, ingredients };
+      console.log(`✅ AI analysis complete for ${ingredients.length} ingredient(s)`);
+    } else {
+      // Fallback to keyword matching
+      console.warn("⚠️  Using fallback keyword matching (no AI available)");
+      results = buildVetResult(lines);
+    }
+
+    res.json(results);
+  } catch (error) {
+    console.error("❌ Error in vet-ingredients:", error);
+    res.status(500).json({ 
+      error: "Failed to analyze ingredients",
+      details: error instanceof Error ? error.message : "Unknown error",
+      fallback: "Try again or check API keys configuration"
+    });
+  }
 });
 
 const assetsDirectory = path.resolve(
@@ -188,7 +290,7 @@ function buildVetResult(lines: string[]): VetIngredientResult {
       name: line,
       status,
       rationale: buildRationale(line, status),
-      sourceUrl: buildSourceUrl(status),
+      sourceUrl: buildEwgSourceUrl(line, status),
       originalStatus: status,
       isOverride: false,
       createdAt: new Date().toISOString(),
@@ -232,16 +334,19 @@ function buildRationale(name: string, status: SafetyStatus): string {
   }
 }
 
+// buildSourceUrl function moved to server/utils/ewgUrlBuilder.ts
+// This function is kept for backward compatibility but is no longer used
+// Kept here temporarily in case of any direct references
 function buildSourceUrl(status: SafetyStatus): string {
   switch (status) {
     case "safe":
-      return "https://pubmed.ncbi.nlm.nih.gov/";
+      return "https://www.ewg.org/skindeep/";
     case "caution":
       return "https://www.ewg.org/skindeep/";
     case "banned":
-      return "https://www.fda.gov/cosmetics/cosmetic-ingredients";
+      return "https://www.ewg.org/skindeep/";
     default:
-      return "https://example.com";
+      return "https://www.ewg.org/skindeep/";
   }
 }
 

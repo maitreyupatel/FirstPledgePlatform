@@ -46,14 +46,14 @@ export default function AdminDashboard() {
     <div className="min-h-screen bg-muted/20">
       <Header showAdminLink={false} />
       
-      <div className="container px-4 md:px-6 py-8">
-        <div className="flex items-center justify-between mb-8">
+      <div className="container max-w-7xl mx-auto px-4 md:px-6 py-8">
+        <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 mb-8">
           <div>
             <h1 className="text-3xl font-bold tracking-tight">Admin Dashboard</h1>
             <p className="text-muted-foreground mt-1">Manage product safety reports</p>
           </div>
           <Link href="/admin/new">
-            <Button data-testid="button-new-product">
+            <Button data-testid="button-new-product" className="w-full sm:w-auto">
               <Plus className="mr-2 h-4 w-4" />
               New Product
             </Button>
@@ -80,7 +80,7 @@ export default function AdminDashboard() {
         </div>
 
         <Tabs value={activeTab} onValueChange={setActiveTab} className="space-y-6">
-          <TabsList data-testid="tabs-filter">
+          <TabsList data-testid="tabs-filter" className="w-full sm:w-auto">
             <TabsTrigger value="all" data-testid="tab-all">All</TabsTrigger>
             <TabsTrigger value="safe" data-testid="tab-safe">Safe</TabsTrigger>
             <TabsTrigger value="caution" data-testid="tab-caution">Caution</TabsTrigger>
@@ -94,7 +94,7 @@ export default function AdminDashboard() {
               </div>
             ) : (
               <>
-                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 justify-items-center md:justify-items-stretch">
                   {filteredProducts.map((product) => (
                     <ProductCard 
                       key={product.id}

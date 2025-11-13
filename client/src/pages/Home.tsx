@@ -22,7 +22,7 @@ export default function Home() {
       <Hero />
       
       <section id="products" className="py-16 md:py-24">
-        <div className="container px-4 md:px-6">
+        <div className="container max-w-7xl mx-auto px-4 md:px-6">
           <div className="text-center mb-12 space-y-4">
             <h2 className="text-3xl md:text-4xl font-bold tracking-tight">
               Recently Vetted Products
@@ -37,7 +37,7 @@ export default function Home() {
               Loading products...
             </div>
           ) : products && products.length > 0 ? (
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8">
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8 justify-items-center md:justify-items-stretch">
               {products.map((product) => (
                 <ProductCard 
                   key={product.id} 
@@ -58,7 +58,7 @@ export default function Home() {
       </section>
 
       <section className="py-16 md:py-24 bg-muted/30">
-        <div className="container px-4 md:px-6">
+        <div className="container max-w-7xl mx-auto px-4 md:px-6">
           <div className="max-w-4xl mx-auto text-center space-y-8">
             <h2 className="text-3xl md:text-4xl font-bold tracking-tight">
               How It Works

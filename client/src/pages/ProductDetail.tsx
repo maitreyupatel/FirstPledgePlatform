@@ -59,7 +59,7 @@ export default function ProductDetail({ params }: ProductDetailParams) {
     <div className="min-h-screen bg-muted/10">
       <Header showAdminLink />
 
-      <main className="container px-4 md:px-6 py-10">
+      <main className="container max-w-7xl mx-auto px-4 md:px-6 py-10">
         <div className="mb-10 flex items-center justify-between gap-4">
           <Button variant="ghost" asChild>
             <Link href="/">
@@ -72,19 +72,19 @@ export default function ProductDetail({ params }: ProductDetailParams) {
         </div>
 
         {isLoading && (
-          <div className="flex h-64 items-center justify-center rounded-lg border bg-white text-muted-foreground shadow-sm">
+          <div className="flex h-64 items-center justify-center rounded-lg border bg-card text-card-foreground shadow-sm">
             Loading product report...
           </div>
         )}
 
         {isError && (
-          <div className="flex h-64 items-center justify-center rounded-lg border bg-white text-muted-foreground shadow-sm">
+          <div className="flex h-64 items-center justify-center rounded-lg border bg-card text-card-foreground shadow-sm">
             Unable to load product report. Please try again later.
           </div>
         )}
 
         {!isLoading && !isError && !product && (
-          <div className="flex h-64 items-center justify-center rounded-lg border bg-white text-muted-foreground shadow-sm">
+          <div className="flex h-64 items-center justify-center rounded-lg border bg-card text-card-foreground shadow-sm">
             Product not found.
           </div>
         )}
@@ -100,16 +100,16 @@ export default function ProductDetail({ params }: ProductDetailParams) {
                       {product.status === "published" ? "Published" : "Draft"}
                     </div>
                     <div className="space-y-4">
-                      <h1 className="text-4xl font-semibold tracking-tight text-primary-foreground md:text-5xl">
+                      <h1 className="text-4xl font-semibold tracking-tight text-foreground md:text-5xl">
                         {product.name}
                       </h1>
-                      <p className="text-lg text-primary-foreground/80">
+                      <p className="text-lg text-foreground/80">
                         {product.brand}
                       </p>
                     </div>
                   </div>
 
-                  <div className="mt-10 flex items-center gap-4 rounded-2xl bg-white/80 p-6 shadow-sm backdrop-blur">
+                  <div className="mt-10 flex items-center gap-4 rounded-2xl bg-card/80 dark:bg-card/90 p-6 shadow-sm backdrop-blur">
                     <SafetyBadge status={product.overallStatus} showLabel />
                     <div className="space-y-1">
                       <p className="text-sm uppercase tracking-wide text-muted-foreground">

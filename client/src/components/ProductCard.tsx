@@ -2,11 +2,23 @@ import { Link, useLocation } from "wouter";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { ExternalLink, Edit2 } from "lucide-react";
+import { Edit2, Trash2 } from "lucide-react";
 import SafetyBadge from "./SafetyBadge";
-import { useMutation } from "@tanstack/react-query";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogTrigger,
+} from "@/components/ui/alert-dialog";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
+import { useState } from "react";
 
 type SafetyStatus = "safe" | "caution" | "banned";
 
@@ -33,6 +45,8 @@ export default function ProductCard({
 }: ProductCardProps) {
   const [, setLocation] = useLocation();
   const { toast } = useToast();
+  const queryClient = useQueryClient();
+  const [showDeleteDialog, setShowDeleteDialog] = useState(false);
 
   const createDraftMutation = useMutation({
     mutationFn: async () => {
@@ -46,6 +60,29 @@ export default function ProductCard({
       toast({
         title: "Error",
         description: "Failed to create draft for editing.",
+        variant: "destructive",
+      });
+    },
+  });
+
+  const deleteMutation = useMutation({
+    mutationFn: async () => {
+      const response = await apiRequest("DELETE", `/api/products/${id}`, {});
+      return response;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/products"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/products?includeUnpublished=true"] });
+      toast({
+        title: "Product deleted",
+        description: "The product has been successfully deleted.",
+      });
+      setShowDeleteDialog(false);
+    },
+    onError: () => {
+      toast({
+        title: "Error",
+        description: "Failed to delete product.",
         variant: "destructive",
       });
     },
@@ -74,27 +111,60 @@ export default function ProductCard({
         <p className="text-sm text-muted-foreground font-medium">{brand}</p>
         <h3 className="font-semibold text-lg leading-tight line-clamp-2">{name}</h3>
         {isAdmin ? (
-          <div className="flex gap-2 pt-3">
-            <Button 
-              size="sm" 
-              variant="outline" 
-              className="flex-1"
-              onClick={() => createDraftMutation.mutate()}
-              disabled={createDraftMutation.isPending}
-              data-testid={`button-edit-${id}`}
-            >
-              <Edit2 className="mr-2 h-3 w-3" />
-              Edit
-            </Button>
-            <Link href={`/product/${id}`}>
+          <div className="flex flex-col gap-2 pt-3">
+            <div className="flex gap-2">
               <Button 
                 size="sm" 
-                variant="ghost"
-                data-testid={`button-view-${id}`}
+                variant="outline" 
+                className="flex-1"
+                onClick={() => createDraftMutation.mutate()}
+                disabled={createDraftMutation.isPending}
+                data-testid={`button-edit-${id}`}
               >
-                View
+                <Edit2 className="mr-2 h-3 w-3" />
+                Edit
               </Button>
-            </Link>
+              <Link href={`/product/${id}`}>
+                <Button 
+                  size="sm" 
+                  variant="ghost"
+                  data-testid={`button-view-${id}`}
+                >
+                  View
+                </Button>
+              </Link>
+            </div>
+            <AlertDialog open={showDeleteDialog} onOpenChange={setShowDeleteDialog}>
+              <AlertDialogTrigger asChild>
+                <Button
+                  size="sm"
+                  variant="destructive"
+                  className="w-full"
+                  data-testid={`button-delete-${id}`}
+                >
+                  <Trash2 className="mr-2 h-3 w-3" />
+                  Delete
+                </Button>
+              </AlertDialogTrigger>
+              <AlertDialogContent>
+                <AlertDialogHeader>
+                  <AlertDialogTitle>Delete Product?</AlertDialogTitle>
+                  <AlertDialogDescription>
+                    Are you sure you want to delete "{name}"? This action cannot be undone and will permanently remove the product from the system.
+                  </AlertDialogDescription>
+                </AlertDialogHeader>
+                <AlertDialogFooter>
+                  <AlertDialogCancel>Cancel</AlertDialogCancel>
+                  <AlertDialogAction
+                    onClick={() => deleteMutation.mutate()}
+                    disabled={deleteMutation.isPending}
+                    className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+                  >
+                    {deleteMutation.isPending ? "Deleting..." : "Delete"}
+                  </AlertDialogAction>
+                </AlertDialogFooter>
+              </AlertDialogContent>
+            </AlertDialog>
           </div>
         ) : (
           <div className="flex items-center gap-2 pt-3 text-primary font-medium">

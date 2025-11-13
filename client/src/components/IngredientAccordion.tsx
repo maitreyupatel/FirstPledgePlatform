@@ -33,7 +33,7 @@ export default function IngredientAccordion({ ingredients }: IngredientAccordion
           <AccordionTrigger className="hover:no-underline py-5">
             <div className="flex items-center gap-3 flex-1">
               <SafetyBadge status={ingredient.status} size="sm" />
-              <span className="font-semibold text-left text-base">{ingredient.name}</span>
+              <span className="font-semibold text-left text-base text-foreground">{ingredient.name}</span>
             </div>
           </AccordionTrigger>
           <AccordionContent className="pb-6 pt-2 space-y-4">
@@ -51,7 +51,7 @@ export default function IngredientAccordion({ ingredients }: IngredientAccordion
                 <span className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">
                   Analysis
                 </span>
-                <p className="mt-2 leading-relaxed">{ingredient.rationale}</p>
+                <p className="mt-2 leading-relaxed text-foreground">{ingredient.rationale}</p>
               </div>
 
               <div>
