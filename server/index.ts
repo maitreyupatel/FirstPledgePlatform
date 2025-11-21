@@ -118,20 +118,32 @@ The application cannot run without Supabase storage.
 }
 
 // Initialize Supabase storage (mandatory)
-let storage: SupabaseStorage;
-        try {
-  storage = new SupabaseStorage();
-  console.log("✅ Supabase storage initialized successfully");
-        } catch (error) {
-  const errorMessage = `
+// Use a function to initialize storage lazily to avoid crashing the function on startup
+let storage: SupabaseStorage | null = null;
+
+function getStorage(): SupabaseStorage {
+  if (!storage) {
+    try {
+      console.log("Initializing Supabase storage...");
+      console.log("SUPABASE_URL:", process.env.SUPABASE_URL ? "✅ Set" : "❌ Missing");
+      console.log("SUPABASE_SERVICE_ROLE_KEY:", process.env.SUPABASE_SERVICE_ROLE_KEY ? "✅ Set" : "❌ Missing");
+      
+      storage = new SupabaseStorage();
+      console.log("✅ Supabase storage initialized successfully");
+    } catch (error) {
+      const errorMessage = `
 ❌ CRITICAL: Failed to initialize Supabase storage.
 
 Error: ${error instanceof Error ? error.message : String(error)}
+Stack: ${error instanceof Error ? error.stack : "N/A"}
 
 Please verify your Supabase credentials are correct.
-  `.trim();
-  console.error(errorMessage);
-  throw new Error(`Failed to initialize Supabase storage: ${error instanceof Error ? error.message : String(error)}`);
+      `.trim();
+      console.error(errorMessage);
+      throw new Error(`Failed to initialize Supabase storage: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+  return storage;
 }
 
 app.use(
@@ -149,26 +161,31 @@ app.get("/api/health", (_req, res) => {
 // Public routes (no auth required)
 app.get("/api/products", async (req, res) => {
   try {
-    if (!storage) {
-      console.error("Storage not initialized");
-      return res.status(500).json({ error: "Storage not initialized" });
-    }
+    const storageInstance = getStorage();
     const includeUnpublished = req.query.includeUnpublished === "true";
-    const products = await storage.list({ includeUnpublished });
+    console.log("Fetching products, includeUnpublished:", includeUnpublished);
+    const products = await storageInstance.list({ includeUnpublished });
+    console.log(`Found ${products.length} products`);
     res.json(products);
   } catch (error) {
     console.error("Error listing products:", error);
+    const errorDetails = error instanceof Error ? {
+      message: error.message,
+      name: error.name
+    } : { message: String(error) };
+    
     res.status(500).json({ 
       error: "Failed to list products",
-      details: error instanceof Error ? error.message : String(error)
+      details: errorDetails
     });
   }
 });
 
 app.get("/api/products/:id", async (req, res) => {
   try {
+    const storageInstance = getStorage();
     const includeUnpublished = req.query.includeUnpublished === "true";
-    const product = await storage.getById(req.params.id, { includeUnpublished });
+    const product = await storageInstance.getById(req.params.id, { includeUnpublished });
 
     if (!product) {
       res.status(404).json({ error: "Product not found" });
@@ -178,14 +195,18 @@ app.get("/api/products/:id", async (req, res) => {
     res.json(product);
   } catch (error) {
     console.error("Error fetching product:", error);
-    res.status(500).json({ error: "Failed to fetch product" });
+    res.status(500).json({ 
+      error: "Failed to fetch product",
+      details: error instanceof Error ? error.message : String(error)
+    });
   }
 });
 
 // Admin routes (auth required)
 app.post("/api/products", requireAuth, async (req, res) => {
   try {
-    const product = await storage.create({
+    const storageInstance = getStorage();
+    const product = await storageInstance.create({
       name: req.body.name,
       brand: req.body.brand,
       summary: req.body.summary ?? "",
@@ -197,14 +218,18 @@ app.post("/api/products", requireAuth, async (req, res) => {
 
     res.status(201).json(product);
   } catch (err) {
-    console.error(err);
-    res.status(400).json({ error: "Unable to create product" });
+    console.error("Error creating product:", err);
+    res.status(400).json({ 
+      error: "Unable to create product",
+      details: err instanceof Error ? err.message : String(err)
+    });
   }
 });
 
 app.patch("/api/products/:id", requireAuth, async (req, res) => {
   try {
-    const product = await storage.update(req.params.id, {
+    const storageInstance = getStorage();
+    const product = await storageInstance.update(req.params.id, {
       name: req.body.name,
       brand: req.body.brand,
       summary: req.body.summary,
@@ -222,13 +247,17 @@ app.patch("/api/products/:id", requireAuth, async (req, res) => {
     res.json(product);
   } catch (error) {
     console.error("Error updating product:", error);
-    res.status(500).json({ error: "Failed to update product" });
+    res.status(500).json({ 
+      error: "Failed to update product",
+      details: error instanceof Error ? error.message : String(error)
+    });
   }
 });
 
 app.delete("/api/products/:id", requireAuth, async (req, res) => {
   try {
-    const deleted = await storage.delete(req.params.id);
+    const storageInstance = getStorage();
+    const deleted = await storageInstance.delete(req.params.id);
     if (!deleted) {
       res.status(404).json({ error: "Product not found" });
       return;
@@ -237,13 +266,17 @@ app.delete("/api/products/:id", requireAuth, async (req, res) => {
     res.status(204).send();
   } catch (error) {
     console.error("Error deleting product:", error);
-    res.status(500).json({ error: "Failed to delete product" });
+    res.status(500).json({ 
+      error: "Failed to delete product",
+      details: error instanceof Error ? error.message : String(error)
+    });
   }
 });
 
 app.post("/api/products/:id/edit", requireAuth, async (req, res) => {
   try {
-    const draft = await storage.createDraftFromProduct(req.params.id);
+    const storageInstance = getStorage();
+    const draft = await storageInstance.createDraftFromProduct(req.params.id);
     if (!draft) {
       res.status(404).json({ error: "Product not found" });
       return;
@@ -252,13 +285,17 @@ app.post("/api/products/:id/edit", requireAuth, async (req, res) => {
     res.status(201).json(draft);
   } catch (error) {
     console.error("Error creating draft:", error);
-    res.status(500).json({ error: "Failed to create draft" });
+    res.status(500).json({ 
+      error: "Failed to create draft",
+      details: error instanceof Error ? error.message : String(error)
+    });
   }
 });
 
 app.post("/api/products/:id/merge", requireAuth, async (req, res) => {
   try {
-    const merged = await storage.mergeDraftIntoOriginal(req.params.id);
+    const storageInstance = getStorage();
+    const merged = await storageInstance.mergeDraftIntoOriginal(req.params.id);
     if (!merged) {
       res.status(404).json({ error: "Draft not found or invalid" });
       return;
@@ -267,7 +304,10 @@ app.post("/api/products/:id/merge", requireAuth, async (req, res) => {
     res.json(merged);
   } catch (error) {
     console.error("Error merging draft:", error);
-    res.status(500).json({ error: "Failed to merge draft" });
+    res.status(500).json({ 
+      error: "Failed to merge draft",
+      details: error instanceof Error ? error.message : String(error)
+    });
   }
 });
 
