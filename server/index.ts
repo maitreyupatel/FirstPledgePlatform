@@ -99,10 +99,10 @@ try {
 const app = express();
 
 // Validate required Supabase environment variables
-const supabaseUrl = process.env.SUPABASE_URL;
-const supabaseServiceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
-
-if (!supabaseUrl || !supabaseServiceRoleKey) {
+  const supabaseUrl = process.env.SUPABASE_URL;
+  const supabaseServiceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+  
+  if (!supabaseUrl || !supabaseServiceRoleKey) {
   const errorMessage = `
 ❌ CRITICAL: Supabase credentials are required but not configured.
 
@@ -119,10 +119,10 @@ The application cannot run without Supabase storage.
 
 // Initialize Supabase storage (mandatory)
 let storage: SupabaseStorage;
-try {
+        try {
   storage = new SupabaseStorage();
   console.log("✅ Supabase storage initialized successfully");
-} catch (error) {
+        } catch (error) {
   const errorMessage = `
 ❌ CRITICAL: Failed to initialize Supabase storage.
 
@@ -149,12 +149,19 @@ app.get("/api/health", (_req, res) => {
 // Public routes (no auth required)
 app.get("/api/products", async (req, res) => {
   try {
+    if (!storage) {
+      console.error("Storage not initialized");
+      return res.status(500).json({ error: "Storage not initialized" });
+    }
     const includeUnpublished = req.query.includeUnpublished === "true";
     const products = await storage.list({ includeUnpublished });
     res.json(products);
   } catch (error) {
     console.error("Error listing products:", error);
-    res.status(500).json({ error: "Failed to list products" });
+    res.status(500).json({ 
+      error: "Failed to list products",
+      details: error instanceof Error ? error.message : String(error)
+    });
   }
 });
 
@@ -454,9 +461,9 @@ export default app;
 
 // Only listen on port when running locally (not in Vercel environment)
 if (process.env.VERCEL !== "1") {
-  app.listen(PORT, () => {
-    console.log(`✅ API server listening on http://localhost:${PORT}`);
-  });
+app.listen(PORT, () => {
+  console.log(`✅ API server listening on http://localhost:${PORT}`);
+});
 } else {
   console.log("✅ Running in Vercel serverless environment");
 }
