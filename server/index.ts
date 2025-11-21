@@ -13,8 +13,7 @@ import {
   VetIngredientsRequest,
   SafetyStatus,
 } from "../shared/types";
-// Seed data removed - products will be added via admin portal
-import { MemStorage } from "./storage/memStorage";
+import { SupabaseStorage } from "./storage/supabaseStorage";
 import { buildSourceUrl as buildEwgSourceUrl } from "./utils/ewgUrlBuilder";
 import { AIVettingService } from "./services/aiVettingService";
 import { CitationService } from "./services/citationService";
@@ -35,18 +34,32 @@ const groqApiKey = process.env.GROQ_API_KEY;
 const googleApiKey = process.env.GOOGLE_API_KEY;
 const googleCxId = process.env.GOOGLE_CX_ID;
 
+// Validate AI provider configuration
+if (!["groq", "gemini", "openai"].includes(aiProviderType)) {
+  console.warn(`⚠️  Invalid AI_PROVIDER "${aiProviderType}". Defaulting to "groq".`);
+}
+
 // Select API key based on provider
 let aiApiKey: string | undefined;
 switch (aiProviderType) {
   case "openai":
     aiApiKey = openaiApiKey;
+    if (!aiApiKey) {
+      console.warn(`⚠️  AI_PROVIDER is set to "openai" but OPENAI_API_KEY is not set. AI vetting will use fallback keyword matching.`);
+    }
     break;
   case "groq":
     aiApiKey = groqApiKey;
+    if (!aiApiKey) {
+      console.warn(`⚠️  AI_PROVIDER is set to "groq" but GROQ_API_KEY is not set. AI vetting will use fallback keyword matching.`);
+    }
     break;
   case "gemini":
   default:
     aiApiKey = geminiApiKey;
+    if (!aiApiKey) {
+      console.warn(`⚠️  AI_PROVIDER is set to "gemini" but GEMINI_API_KEY is not set. AI vetting will use fallback keyword matching.`);
+    }
     break;
 }
 
@@ -85,38 +98,40 @@ try {
 
 const app = express();
 
-// Use Supabase storage if enabled, otherwise fallback to MemStorage
-const useSupabaseStorage = process.env.USE_SUPABASE_STORAGE === "true";
-let storage: MemStorage | any;
+// Validate required Supabase environment variables
+const supabaseUrl = process.env.SUPABASE_URL;
+const supabaseServiceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
 
-// Initialize storage - start with MemStorage, upgrade to Supabase if enabled
-storage = new MemStorage([]);
+if (!supabaseUrl || !supabaseServiceRoleKey) {
+  const errorMessage = `
+❌ CRITICAL: Supabase credentials are required but not configured.
 
-if (useSupabaseStorage) {
-  // Check if Supabase credentials are configured
-  const supabaseUrl = process.env.SUPABASE_URL;
-  const supabaseServiceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
-  
-  if (!supabaseUrl || !supabaseServiceRoleKey) {
-    console.warn("⚠️  Supabase credentials not configured. Using MemStorage.");
-    console.warn("   Set SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY in .env to use Supabase");
-  } else {
-    // Initialize Supabase storage asynchronously
-    import("./storage/supabaseStorage")
-      .then((module) => {
-        try {
-          storage = new module.SupabaseStorage();
-          console.log("✅ Using Supabase storage");
-        } catch (error) {
-          console.error("❌ Failed to initialize Supabase storage, using MemStorage:", error);
-        }
-      })
-      .catch((error) => {
-        console.error("❌ Failed to load Supabase storage module, using MemStorage:", error);
-      });
-  }
-} else {
-  console.log("📦 Using in-memory storage (MemStorage)");
+Required environment variables:
+  - SUPABASE_URL
+  - SUPABASE_SERVICE_ROLE_KEY
+
+Please set these in your .env file or environment variables.
+The application cannot run without Supabase storage.
+  `.trim();
+  console.error(errorMessage);
+  throw new Error("Missing required Supabase configuration. Set SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY.");
+}
+
+// Initialize Supabase storage (mandatory)
+let storage: SupabaseStorage;
+try {
+  storage = new SupabaseStorage();
+  console.log("✅ Supabase storage initialized successfully");
+} catch (error) {
+  const errorMessage = `
+❌ CRITICAL: Failed to initialize Supabase storage.
+
+Error: ${error instanceof Error ? error.message : String(error)}
+
+Please verify your Supabase credentials are correct.
+  `.trim();
+  console.error(errorMessage);
+  throw new Error(`Failed to initialize Supabase storage: ${error instanceof Error ? error.message : String(error)}`);
 }
 
 app.use(
@@ -434,9 +449,17 @@ app.get("*", (_req, res) => {
   });
 });
 
-app.listen(PORT, () => {
-  console.log(`✅ API server listening on http://localhost:${PORT}`);
-});
+// Export app for Vercel serverless function
+export default app;
+
+// Only listen on port when running locally (not in Vercel environment)
+if (process.env.VERCEL !== "1") {
+  app.listen(PORT, () => {
+    console.log(`✅ API server listening on http://localhost:${PORT}`);
+  });
+} else {
+  console.log("✅ Running in Vercel serverless environment");
+}
 
 const bannedKeywords = [
   "phthalate",

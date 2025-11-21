@@ -161,74 +161,12 @@ export class AIVettingService {
     return result;
   }
 
-  /**
-   * Analyze ingredient with retry logic for rate limits
-   */
-  private async analyzeWithRetry(
-    ingredientName: string,
-    ewgData: EWGIngredientData,
-    researchSources: ResearchResult[]
-  ): Promise<Partial<IngredientAnalysis>> {
-    let lastError: Error | null = null;
-
-    for (let attempt = 1; attempt <= this.maxRetries; attempt++) {
-      try {
-        const prompt = this.buildPrompt(ingredientName, ewgData, researchSources);
-        const result = await this.model.generateContent(prompt);
-        const response = await result.response;
-        const text = response.text();
-        
-        return this.parseAIResponse(ingredientName, text);
-      } catch (error: any) {
-        lastError = error;
-        
-        // Check if it's a rate limit error (429)
-        if (error.status === 429 || error.message?.includes("429")) {
-          const retryAfter = this.extractRetryDelay(error) || this.retryDelay;
-          console.warn(
-            `Rate limit hit for ${ingredientName} (attempt ${attempt}/${this.maxRetries}). Retrying in ${retryAfter}ms...`
-          );
-          
-          if (attempt < this.maxRetries) {
-            await this.sleep(retryAfter);
-            continue;
-          }
-        }
-        
-        // For other errors, don't retry
-        throw error;
-      }
-    }
-
-    // If all retries failed, throw the last error
-    throw lastError || new Error("Failed to analyze ingredient");
-  }
+  // Note: Retry logic is now handled by individual AI provider implementations
+  // The analyzeWithRetry method has been removed as it referenced non-existent properties
+  // and is no longer used in the current implementation
 
   /**
-   * Extract retry delay from error response
-   */
-  private extractRetryDelay(error: any): number | null {
-    try {
-      if (error.errorDetails) {
-        for (const detail of error.errorDetails) {
-          if (detail["@type"] === "type.googleapis.com/google.rpc.RetryInfo") {
-            const retryDelay = detail.retryDelay;
-            if (retryDelay) {
-              // Convert "10s" to milliseconds
-              const seconds = parseFloat(retryDelay.replace(/s$/, ""));
-              return seconds * 1000;
-            }
-          }
-        }
-      }
-    } catch (e) {
-      // Ignore parsing errors
-    }
-    return null;
-  }
-
-  /**
-   * Sleep utility for retries
+   * Sleep utility for delays between requests
    */
   private sleep(ms: number): Promise<void> {
     return new Promise(resolve => setTimeout(resolve, ms));
@@ -345,7 +283,7 @@ Be specific and evidence-based. The rationale should be unique to this ingredien
       let description = parsed.description || "";
       if (description) {
         // Ensure it's formatted as 3 lines
-        const lines = description.split('\n').filter(line => line.trim()).slice(0, 3);
+        const lines = description.split('\n').filter((line: string) => line.trim()).slice(0, 3);
         if (lines.length < 3) {
           // Pad with default lines if needed
           while (lines.length < 3) {

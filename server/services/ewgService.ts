@@ -142,7 +142,7 @@ export class EWGService {
 
     // Extract concerns
     const concerns: string[] = [];
-    const concernMatches = html.matchAll(/concern[:\s]*([^<\n]+)/gi);
+    const concernMatches = Array.from(html.matchAll(/concern[:\s]*([^<\n]+)/gi));
     for (const match of concernMatches) {
       concerns.push(match[1].trim());
     }

@@ -6,12 +6,43 @@ import {
   ProductStatus,
   SafetyStatus,
 } from "../../shared/types";
-import type {
-  CreateIngredientInput,
-  CreateProductInput,
-  UpdateProductInput,
-  ListProductsOptions,
-} from "./memStorage";
+
+// Storage input types (previously defined in memStorage.ts)
+export interface CreateIngredientInput {
+  id?: string;
+  name: string;
+  status: SafetyStatus;
+  rationale: string;
+  sourceUrl: string;
+  originalStatus?: SafetyStatus;
+  isOverride?: boolean;
+}
+
+export interface CreateProductInput {
+  name: string;
+  brand: string;
+  summary: string;
+  imageUrl: string;
+  overallStatus?: SafetyStatus;
+  status?: ProductStatus;
+  ingredients?: CreateIngredientInput[];
+  editedFromProductId?: string | null;
+}
+
+export interface UpdateProductInput {
+  name?: string;
+  brand?: string;
+  summary?: string;
+  imageUrl?: string;
+  overallStatus?: SafetyStatus;
+  status?: ProductStatus;
+  ingredients?: CreateIngredientInput[];
+  publishedAt?: string | null;
+}
+
+export interface ListProductsOptions {
+  includeUnpublished?: boolean;
+}
 
 export class SupabaseStorage {
   private supabase;
@@ -89,7 +120,7 @@ export class SupabaseStorage {
     const now = new Date().toISOString();
     const productId = randomUUID();
 
-    const ingredients = (input.ingredients ?? []).map((ingredient) =>
+    const ingredients = (input.ingredients ?? []).map((ingredient: CreateIngredientInput) =>
       this.normalizeIngredient(ingredient, productId, now),
     );
 
@@ -121,7 +152,7 @@ export class SupabaseStorage {
 
     // Insert ingredients
     if (ingredients.length > 0) {
-      const ingredientRows = ingredients.map((ing) => ({
+      const ingredientRows = ingredients.map((ing: Ingredient) => ({
         id: ing.id,
         product_id: productId,
         name: ing.name,
@@ -190,7 +221,7 @@ export class SupabaseStorage {
       updateData.overall_status = input.overallStatus;
     } else if (input.ingredients) {
       // Auto-calculate only if overallStatus was not provided
-      const normalizedIngredients = input.ingredients.map((ingredient) =>
+      const normalizedIngredients = input.ingredients.map((ingredient: CreateIngredientInput) =>
         this.normalizeIngredient(ingredient, id, now, existing.ingredients),
       );
       updateData.overall_status = this.deriveOverallStatus(normalizedIngredients);
@@ -223,12 +254,12 @@ export class SupabaseStorage {
       }
 
       // Insert new ingredients
-      const normalizedIngredients = input.ingredients.map((ingredient) =>
+      const normalizedIngredients = input.ingredients.map((ingredient: CreateIngredientInput) =>
         this.normalizeIngredient(ingredient, id, now, existing.ingredients),
       );
 
       if (normalizedIngredients.length > 0) {
-        const ingredientRows = normalizedIngredients.map((ing) => ({
+        const ingredientRows = normalizedIngredients.map((ing: Ingredient) => ({
           id: ing.id,
           product_id: id,
           name: ing.name,
