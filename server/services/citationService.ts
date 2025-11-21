@@ -77,8 +77,18 @@ export class CitationService {
       const response = await fetch(url);
       
       if (!response.ok) {
-        const errorText = await response.text();
-        console.error(`Google Search API error (${response.status}):`, errorText);
+        // Don't log every error - only log significant issues
+        const status = response.status;
+        
+        // Only log server errors (500+) or quota errors (429)
+        if (status >= 500 || status === 429) {
+          const errorText = await response.text().catch(() => "");
+          if (status === 429) {
+            console.warn(`⚠️  Google Search API rate limit/quota exceeded. Citation search may be limited.`);
+          } else if (status >= 500) {
+            console.debug(`Google Search API server error (${status}) for ${source}. Skipping.`);
+          }
+        }
         return null;
       }
 
@@ -96,7 +106,7 @@ export class CitationService {
 
       return null;
     } catch (error) {
-      console.error(`Error searching ${source}:`, error);
+      // Silently fail - citation search is optional
       return null;
     }
   }

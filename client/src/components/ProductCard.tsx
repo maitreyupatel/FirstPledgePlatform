@@ -30,7 +30,6 @@ interface ProductCardProps {
   safetyStatus: SafetyStatus;
   isAdmin?: boolean;
   productStatus?: "draft" | "published";
-  hasDraft?: boolean;
 }
 
 export default function ProductCard({
@@ -41,29 +40,12 @@ export default function ProductCard({
   safetyStatus,
   isAdmin = false,
   productStatus = "published",
-  hasDraft = false,
 }: ProductCardProps) {
   const [, setLocation] = useLocation();
   const { toast } = useToast();
   const queryClient = useQueryClient();
   const [showDeleteDialog, setShowDeleteDialog] = useState(false);
 
-  const createDraftMutation = useMutation({
-    mutationFn: async () => {
-      const response = await apiRequest("POST", `/api/products/${id}/edit`, {});
-      return response.json();
-    },
-    onSuccess: (draft) => {
-      setLocation(`/admin/edit/${draft.id}`);
-    },
-    onError: () => {
-      toast({
-        title: "Error",
-        description: "Failed to create draft for editing.",
-        variant: "destructive",
-      });
-    },
-  });
 
   const deleteMutation = useMutation({
     mutationFn: async () => {
@@ -71,8 +53,11 @@ export default function ProductCard({
       return response;
     },
     onSuccess: () => {
+      // Invalidate all product queries to refresh the list
       queryClient.invalidateQueries({ queryKey: ["/api/products"] });
       queryClient.invalidateQueries({ queryKey: ["/api/products?includeUnpublished=true"] });
+      // Also remove the specific product from cache
+      queryClient.removeQueries({ queryKey: [`/api/products/${id}`] });
       toast({
         title: "Product deleted",
         description: "The product has been successfully deleted.",
@@ -102,9 +87,6 @@ export default function ProductCard({
           {isAdmin && productStatus === "draft" && (
             <Badge variant="secondary" data-testid={`badge-draft-${id}`}>Draft</Badge>
           )}
-          {isAdmin && hasDraft && productStatus === "published" && (
-            <Badge variant="secondary" data-testid={`badge-has-draft-${id}`}>Has Draft</Badge>
-          )}
         </div>
       </div>
       <div className="p-5 space-y-2">
@@ -117,8 +99,10 @@ export default function ProductCard({
                 size="sm" 
                 variant="outline" 
                 className="flex-1"
-                onClick={() => createDraftMutation.mutate()}
-                disabled={createDraftMutation.isPending}
+                onClick={() => {
+                  // Always navigate directly to edit page
+                  setLocation(`/admin/edit/${id}`);
+                }}
                 data-testid={`button-edit-${id}`}
               >
                 <Edit2 className="mr-2 h-3 w-3" />

@@ -45,15 +45,10 @@ export default function ProductDetail({ params }: ProductDetailParams) {
     queryKey: [`/api/products/${productId}`],
   });
 
-  const safeCount =
-    product?.ingredients.filter((ingredient) => ingredient.status === "safe")
-      .length ?? 0;
-  const cautionCount =
-    product?.ingredients.filter((ingredient) => ingredient.status === "caution")
-      .length ?? 0;
-  const bannedCount =
-    product?.ingredients.filter((ingredient) => ingredient.status === "banned")
-      .length ?? 0;
+  const ingredients = product?.ingredients || [];
+  const safeCount = ingredients.filter((ingredient) => ingredient.status === "safe").length;
+  const cautionCount = ingredients.filter((ingredient) => ingredient.status === "caution").length;
+  const bannedCount = ingredients.filter((ingredient) => ingredient.status === "banned").length;
 
   return (
     <div className="min-h-screen bg-muted/10">
@@ -138,17 +133,29 @@ export default function ProductDetail({ params }: ProductDetailParams) {
                       bannedCount={bannedCount}
                     />
                     <Separator className="my-6" />
-                    <div className="space-y-3 text-sm text-muted-foreground">
-                      <p>
-                        This report summarizes the current risk assessment for
-                        each ingredient. Draft products are visible only to
-                        administrators until published.
-                      </p>
-                      <p>
-                        Override any ingredient from the admin workspace to
-                        document editorial decisions.
-                      </p>
-                    </div>
+                    {/* Only show draft-related text for draft products */}
+                    {product.status === "draft" && (
+                      <div className="space-y-3 text-sm text-muted-foreground">
+                        <p>
+                          This report summarizes the current risk assessment for
+                          each ingredient. Draft products are visible only to
+                          administrators until published.
+                        </p>
+                        <p>
+                          Override any ingredient from the admin workspace to
+                          document editorial decisions.
+                        </p>
+                      </div>
+                    )}
+                    {/* For published products, show consumer-friendly text */}
+                    {product.status === "published" && (
+                      <div className="space-y-3 text-sm text-muted-foreground">
+                        <p>
+                          This report summarizes the current risk assessment for
+                          each ingredient based on scientific research and safety data.
+                        </p>
+                      </div>
+                    )}
                   </div>
                 </div>
               </div>
@@ -164,7 +171,7 @@ export default function ProductDetail({ params }: ProductDetailParams) {
                   source citation used to support the current safety status.
                 </p>
               </div>
-              <IngredientAccordion ingredients={product.ingredients} />
+              <IngredientAccordion ingredients={ingredients} />
             </section>
           </div>
         )}

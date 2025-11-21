@@ -5,7 +5,7 @@ import {
   useQueryClient,
 } from "@tanstack/react-query";
 import { useForm } from "react-hook-form";
-import { Link, useLocation } from "wouter";
+import { Link, useLocation, useRoute } from "wouter";
 
 import Header from "@/components/Header";
 import IngredientAccordion from "@/components/IngredientAccordion";
@@ -32,13 +32,6 @@ import { useToast } from "@/hooks/use-toast";
 import { apiRequest } from "@/lib/queryClient";
 import { VetIngredientResult, SafetyStatus } from "@shared/types";
 
-interface ProductFormParams {
-  params: {
-    action: "new" | "edit" | string;
-    id?: string;
-  };
-}
-
 interface IngredientInput {
   id: string;
   name: string;
@@ -59,6 +52,7 @@ interface ProductFormValues {
 interface ProductResponse extends ProductFormValues {
   id: string;
   ingredients: IngredientInput[];
+  editedFromProductId?: string | null;
 }
 
 const statusCycle: SafetyStatus[] = ["safe", "caution", "banned"];
@@ -68,9 +62,10 @@ const generateId = () =>
     ? crypto.randomUUID()
     : Math.random().toString(36).slice(2);
 
-export default function ProductForm({ params }: ProductFormParams) {
-  const isCreate = params.action === "new";
-  const productId = params.id;
+export default function ProductForm() {
+  const [match, params] = useRoute<{ action: string; id?: string }>("/admin/:action/:id?");
+  const isCreate = params?.action === "new";
+  const productId = params?.id;
   const [, navigate] = useLocation();
   const queryClient = useQueryClient();
   const { toast } = useToast();
@@ -79,6 +74,13 @@ export default function ProductForm({ params }: ProductFormParams) {
   const [ingredientsText, setIngredientsText] = useState("");
   const [showPublishDialog, setShowPublishDialog] = useState(false);
   const [showUnpublishDialog, setShowUnpublishDialog] = useState(false);
+  const [showCancelDialog, setShowCancelDialog] = useState(false);
+  const [isOverallStatusOverridden, setIsOverallStatusOverridden] = useState(false);
+  const [originalProductId, setOriginalProductId] = useState<string | null>(null);
+  const [originalProductStatus, setOriginalProductStatus] = useState<"draft" | "published" | null>(null);
+  const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
+  const [initialFormData, setInitialFormData] = useState<ProductFormValues | null>(null);
+  const [initialIngredients, setInitialIngredients] = useState<IngredientInput[]>([]);
   const [newIngredient, setNewIngredient] = useState({
     name: "",
     status: "safe" as SafetyStatus,
@@ -102,24 +104,127 @@ export default function ProductForm({ params }: ProductFormParams) {
       ? [`/api/products/${productId}?includeUnpublished=true`]
       : null;
 
-  const { data: productData, isLoading } = useQuery<ProductResponse | null>({
+  const { data: productData, isLoading, refetch: refetchProduct } = useQuery<ProductResponse | null>({
     queryKey: productQueryKey ?? ["product-form:noop"],
     enabled: Boolean(productQueryKey),
+    staleTime: 0, // Always refetch when editing
   });
 
+  // Query for original product if we're editing a draft
+  const originalProductQueryKey = 
+    !isCreate && productData?.editedFromProductId
+      ? [`/api/products/${productData.editedFromProductId}?includeUnpublished=true`]
+      : null;
+
+  const { data: originalProductData } = useQuery<ProductResponse | null>({
+    queryKey: originalProductQueryKey ?? ["original-product:noop"],
+    enabled: Boolean(originalProductQueryKey),
+    staleTime: 0,
+  });
+
+  // Reset form when productData loads (only for edit mode)
   useEffect(() => {
-    if (productData) {
+    if (!isCreate && productData && !isLoading) {
+      console.log("Loading product data into form:", productData);
+      const loadedIngredients = productData.ingredients ?? [];
+      
+      // Track original product if this is a draft
+      if (productData.editedFromProductId) {
+        setOriginalProductId(productData.editedFromProductId);
+      } else {
+        setOriginalProductId(null);
+        setOriginalProductStatus(null);
+      }
+      
+      // Calculate what the overall status should be based on ingredients
+      const calculatedStatus = (() => {
+        if (loadedIngredients.some((i) => i.status === "banned")) return "banned";
+        if (loadedIngredients.some((i) => i.status === "caution")) return "caution";
+        return "safe";
+      })();
+      
+      // Check if the stored status differs from calculated (meaning it was overridden)
+      const wasOverridden = productData.overallStatus !== calculatedStatus;
+      setIsOverallStatusOverridden(wasOverridden);
+      
+      // Store initial state for change tracking
+      const initialData: ProductFormValues = {
+        name: productData.name || "",
+        brand: productData.brand || "",
+        summary: productData.summary || "",
+        imageUrl: productData.imageUrl || "",
+        status: productData.status || "draft",
+        overallStatus: productData.overallStatus || calculatedStatus,
+      };
+      setInitialFormData(initialData);
+      setInitialIngredients(JSON.parse(JSON.stringify(loadedIngredients))); // Deep copy
+      setHasUnsavedChanges(false);
+      
+      form.reset(initialData);
+      setIngredients(loadedIngredients);
+    } else if (isCreate && !isLoading) {
+      // Reset to defaults for new product
+      setIsOverallStatusOverridden(false);
+      setOriginalProductId(null);
+      setOriginalProductStatus(null);
+      setInitialFormData(null);
+      setInitialIngredients([]);
+      setHasUnsavedChanges(false);
       form.reset({
-        name: productData.name,
-        brand: productData.brand,
-        summary: productData.summary,
-        imageUrl: productData.imageUrl,
-        status: productData.status,
-        overallStatus: productData.overallStatus,
+        name: "",
+        brand: "",
+        summary: "",
+        imageUrl: "",
+        status: "draft",
+        overallStatus: "safe",
       });
-      setIngredients(productData.ingredients ?? []);
+      setIngredients([]);
     }
-  }, [productData, form]);
+  }, [productData, isLoading, isCreate, form]);
+
+  // Update original product status when original product data loads
+  useEffect(() => {
+    if (originalProductData) {
+      setOriginalProductStatus(originalProductData.status || "draft");
+    }
+  }, [originalProductData]);
+
+  // Check if product is published and should be locked
+  const isPublishedAndLocked = !isCreate && productData?.status === "published" && !originalProductId;
+
+  // Watch for form and ingredient changes to track unsaved changes
+  useEffect(() => {
+    if (isCreate || !initialFormData) {
+      setHasUnsavedChanges(false);
+      return;
+    }
+    
+    const currentData = form.getValues();
+    const formChanged = 
+      currentData.name !== initialFormData.name ||
+      currentData.brand !== initialFormData.brand ||
+      currentData.summary !== initialFormData.summary ||
+      currentData.imageUrl !== initialFormData.imageUrl ||
+      currentData.overallStatus !== initialFormData.overallStatus;
+    
+    // Compare ingredients by serializing to JSON (deep comparison, ignoring IDs)
+    const ingredientsChanged = 
+      JSON.stringify(ingredients.map(i => ({ name: i.name, status: i.status, rationale: i.rationale, sourceUrl: i.sourceUrl }))) !== 
+      JSON.stringify(initialIngredients.map(i => ({ name: i.name, status: i.status, rationale: i.rationale, sourceUrl: i.sourceUrl })));
+    
+    setHasUnsavedChanges(formChanged || ingredientsChanged);
+  }, [
+    form.watch("name"),
+    form.watch("brand"),
+    form.watch("summary"),
+    form.watch("imageUrl"),
+    form.watch("overallStatus"),
+    ingredients,
+    initialFormData,
+    initialIngredients,
+    isCreate,
+    form,
+  ]);
 
   const vetMutation = useMutation({
     mutationFn: async (text: string) => {
@@ -130,6 +235,15 @@ export default function ProductForm({ params }: ProductFormParams) {
     },
     onSuccess: (result) => {
       setIngredients(result.ingredients);
+      // Reset override flag when new ingredients are analyzed
+      setIsOverallStatusOverridden(false);
+      // Auto-update overall status based on new ingredients
+      const newCalculatedStatus = (() => {
+        if (result.ingredients.some((i) => i.status === "banned")) return "banned";
+        if (result.ingredients.some((i) => i.status === "caution")) return "caution";
+        return "safe";
+      })();
+      form.setValue("overallStatus", newCalculatedStatus);
       toast({
         title: "Ingredients analyzed",
         description:
@@ -160,16 +274,53 @@ export default function ProductForm({ params }: ProductFormParams) {
       );
       return response.json();
     },
-    onSuccess: () => {
+    onSuccess: (savedProduct) => {
+      // Invalidate all product queries
       queryClient.invalidateQueries({ queryKey: ["/api/products"] });
       queryClient.invalidateQueries({
         queryKey: ["/api/products?includeUnpublished=true"],
       });
+      
+      // If editing, invalidate the specific product query and stay on edit page
+      if (!isCreate && productId) {
+        queryClient.invalidateQueries({
+          queryKey: [`/api/products/${productId}?includeUnpublished=true`],
+        });
+        // Refetch the product to ensure we have the latest data
+        // The useEffect will handle updating the form when productData changes
+        setTimeout(() => {
+          refetchProduct();
+        }, 100);
+      }
+      
+      // Reset unsaved changes tracking after successful save
+      if (!isCreate && savedProduct) {
+        const updatedInitialData: ProductFormValues = {
+          name: savedProduct.name || "",
+          brand: savedProduct.brand || "",
+          summary: savedProduct.summary || "",
+          imageUrl: savedProduct.imageUrl || "",
+          status: savedProduct.status || "draft",
+          overallStatus: savedProduct.overallStatus || "safe",
+        };
+        setInitialFormData(updatedInitialData);
+        setInitialIngredients(JSON.parse(JSON.stringify(savedProduct.ingredients ?? [])));
+        setHasUnsavedChanges(false);
+      }
+      
       toast({
         title: "Product saved",
-        description: "Your changes have been stored successfully.",
+        description: isCreate 
+          ? "Product created successfully. You can now edit it."
+          : "Your changes have been stored successfully.",
       });
-      navigate("/admin");
+      
+      // Only navigate to admin if creating new product
+      if (isCreate && savedProduct.id) {
+        // Navigate to edit page for the newly created product
+        navigate(`/admin/edit/${savedProduct.id}`);
+      }
+      // If editing, stay on the same page
     },
     onError: () => {
       toast({
@@ -194,6 +345,20 @@ export default function ProductForm({ params }: ProductFormParams) {
     () => ingredients.filter((ingredient) => ingredient.status === "banned").length,
     [ingredients],
   );
+
+  // Auto-calculate overall status from ingredients (banned > caution > safe)
+  const calculatedOverallStatus = useMemo(() => {
+    if (bannedCount > 0) return "banned";
+    if (cautionCount > 0) return "caution";
+    return "safe";
+  }, [bannedCount, cautionCount]);
+
+  // Update overall status when ingredients change (unless manually overridden)
+  useEffect(() => {
+    if (!isOverallStatusOverridden && ingredients.length > 0) {
+      form.setValue("overallStatus", calculatedOverallStatus);
+    }
+  }, [calculatedOverallStatus, ingredients.length, isOverallStatusOverridden, form]);
 
   const addManualIngredient = () => {
     if (!newIngredient.name.trim()) {
@@ -244,6 +409,16 @@ export default function ProductForm({ params }: ProductFormParams) {
   };
 
   const handleSubmit = form.handleSubmit((values) => {
+    // Prevent saving published products
+    if (isPublishedAndLocked) {
+      toast({
+        title: "Cannot save published product",
+        description: "Please unpublish the product first to make changes.",
+        variant: "destructive",
+      });
+      return;
+    }
+
     if (ingredients.length === 0) {
       toast({
         title: "Add ingredients first",
@@ -255,6 +430,53 @@ export default function ProductForm({ params }: ProductFormParams) {
     }
 
     saveMutation.mutate(values);
+  });
+
+  const publishMutation = useMutation({
+    mutationFn: async (values: ProductFormValues) => {
+      // If this is a draft of a published product, merge it into the original
+      if (originalProductId && productData?.editedFromProductId) {
+        // First save the draft with current values
+        const draftPayload = { ...values, ingredients };
+        await apiRequest("PATCH", `/api/products/${productId}`, draftPayload);
+        
+        // Then merge the draft into the original
+        const response = await apiRequest("POST", `/api/products/${productId}/merge`, {});
+        return response.json();
+      } else {
+        // Regular publish - just update status
+        const payload = { ...values, ingredients, status: "published" };
+        const response = await apiRequest("PATCH", `/api/products/${productId}`, payload);
+        return response.json();
+      }
+    },
+    onSuccess: (savedProduct) => {
+      // Invalidate all product queries
+      queryClient.invalidateQueries({ queryKey: ["/api/products"] });
+      queryClient.invalidateQueries({
+        queryKey: ["/api/products?includeUnpublished=true"],
+      });
+      
+      // Reset unsaved changes tracking after successful publish
+      setHasUnsavedChanges(false);
+      
+      toast({
+        title: "Product published",
+        description: originalProductId 
+          ? "Draft has been merged into the published product."
+          : "Product has been published successfully.",
+      });
+      
+      // Navigate to admin dashboard
+      navigate("/admin");
+    },
+    onError: (error: any) => {
+      toast({
+        title: "Publish failed",
+        description: error.message || "Failed to publish product. Please try again.",
+        variant: "destructive",
+      });
+    },
   });
 
   const handlePublish = () => {
@@ -269,12 +491,26 @@ export default function ProductForm({ params }: ProductFormParams) {
       setShowPublishDialog(false);
       return;
     }
-    saveMutation.mutate({ ...currentValues, status: "published" });
+    publishMutation.mutate(currentValues);
     setShowPublishDialog(false);
   };
 
   const handleUnpublish = () => {
     const currentValues = form.getValues();
+    // Unpublish should only update the status, not create a new product
+    // If we're editing a draft, we shouldn't be able to unpublish (shouldn't show button)
+    // If we're editing the original published product, just update its status
+    if (originalProductId) {
+      // This shouldn't happen - can't unpublish when editing a draft
+      toast({
+        title: "Cannot unpublish",
+        description: "You are editing a draft. Publish the draft to update the original product.",
+        variant: "destructive",
+      });
+      setShowUnpublishDialog(false);
+      return;
+    }
+    // Update the current product's status to draft
     saveMutation.mutate({ ...currentValues, status: "draft" });
     setShowUnpublishDialog(false);
   };
@@ -297,71 +533,120 @@ export default function ProductForm({ params }: ProductFormParams) {
             </p>
           </div>
           <div className="flex items-center gap-2 flex-wrap">
-            <Button variant="outline" asChild>
-              <Link href="/admin">
-                <span>Cancel</span>
-              </Link>
-            </Button>
-            <Button
-              onClick={handleSubmit}
-              disabled={saveMutation.isPending || isLoading}
-              data-testid="button-save-product"
-            >
-              {saveMutation.isPending ? "Saving..." : "Save Product"}
-            </Button>
-            {form.watch("status") === "draft" ? (
-              <AlertDialog open={showPublishDialog} onOpenChange={setShowPublishDialog}>
-                <AlertDialogTrigger asChild>
-                  <Button
-                    variant="default"
-                    disabled={saveMutation.isPending || isLoading}
-                    data-testid="button-publish-product"
+            <AlertDialog open={showCancelDialog} onOpenChange={setShowCancelDialog}>
+              <AlertDialogTrigger asChild>
+                <Button 
+                  variant="outline"
+                  onClick={(e) => {
+                    e.preventDefault();
+                    if (hasUnsavedChanges) {
+                      setShowCancelDialog(true);
+                    } else {
+                      navigate("/admin");
+                    }
+                  }}
+                >
+                  Cancel
+                </Button>
+              </AlertDialogTrigger>
+              <AlertDialogContent>
+                <AlertDialogHeader>
+                  <AlertDialogTitle>Discard Changes?</AlertDialogTitle>
+                  <AlertDialogDescription>
+                    You have unsaved changes. Are you sure you want to leave? All changes will be lost.
+                  </AlertDialogDescription>
+                </AlertDialogHeader>
+                <AlertDialogFooter>
+                  <AlertDialogCancel>Stay</AlertDialogCancel>
+                  <AlertDialogAction 
+                    onClick={() => {
+                      setShowCancelDialog(false);
+                      navigate("/admin");
+                    }}
                   >
-                    Publish
-                  </Button>
-                </AlertDialogTrigger>
-                <AlertDialogContent>
-                  <AlertDialogHeader>
-                    <AlertDialogTitle>Publish Product?</AlertDialogTitle>
-                    <AlertDialogDescription>
-                      This will make the product report publicly visible. Make sure all information is accurate and complete before publishing.
-                    </AlertDialogDescription>
-                  </AlertDialogHeader>
-                  <AlertDialogFooter>
-                    <AlertDialogCancel>Cancel</AlertDialogCancel>
-                    <AlertDialogAction onClick={handlePublish}>
-                      Publish
-                    </AlertDialogAction>
-                  </AlertDialogFooter>
-                </AlertDialogContent>
-              </AlertDialog>
-            ) : (
-              <AlertDialog open={showUnpublishDialog} onOpenChange={setShowUnpublishDialog}>
-                <AlertDialogTrigger asChild>
-                  <Button
-                    variant="outline"
-                    disabled={saveMutation.isPending || isLoading}
-                    data-testid="button-unpublish-product"
-                  >
-                    Unpublish
-                  </Button>
-                </AlertDialogTrigger>
-                <AlertDialogContent>
-                  <AlertDialogHeader>
-                    <AlertDialogTitle>Unpublish Product?</AlertDialogTitle>
-                    <AlertDialogDescription>
-                      This will hide the product from public view. You can republish it later.
-                    </AlertDialogDescription>
-                  </AlertDialogHeader>
-                  <AlertDialogFooter>
-                    <AlertDialogCancel>Cancel</AlertDialogCancel>
-                    <AlertDialogAction onClick={handleUnpublish}>
-                      Unpublish
-                    </AlertDialogAction>
-                  </AlertDialogFooter>
-                </AlertDialogContent>
-              </AlertDialog>
+                    Discard Changes
+                  </AlertDialogAction>
+                </AlertDialogFooter>
+              </AlertDialogContent>
+            </AlertDialog>
+            {!isPublishedAndLocked && (
+              <Button
+                onClick={handleSubmit}
+                disabled={saveMutation.isPending || isLoading}
+                data-testid="button-save-product"
+              >
+                {saveMutation.isPending ? "Saving..." : "Save Product"}
+              </Button>
             )}
+            {/* Simplified button logic: Published = Unpublish only, Draft = Publish */}
+            {(() => {
+              // Don't show button until we know the status (for edit mode)
+              if (!isCreate && isLoading) {
+                return null;
+              }
+              
+              // Published product - show only Unpublish button
+              if (isPublishedAndLocked) {
+                return (
+                  <AlertDialog open={showUnpublishDialog} onOpenChange={setShowUnpublishDialog}>
+                    <AlertDialogTrigger asChild>
+                      <Button
+                        variant="outline"
+                        disabled={saveMutation.isPending || isLoading}
+                        data-testid="button-unpublish-product"
+                      >
+                        Unpublish
+                      </Button>
+                    </AlertDialogTrigger>
+                    <AlertDialogContent>
+                      <AlertDialogHeader>
+                        <AlertDialogTitle>Unpublish Product?</AlertDialogTitle>
+                        <AlertDialogDescription>
+                          This will hide the product from public view. You can republish it later.
+                        </AlertDialogDescription>
+                      </AlertDialogHeader>
+                      <AlertDialogFooter>
+                        <AlertDialogCancel>Cancel</AlertDialogCancel>
+                        <AlertDialogAction onClick={handleUnpublish}>
+                          Unpublish
+                        </AlertDialogAction>
+                      </AlertDialogFooter>
+                    </AlertDialogContent>
+                  </AlertDialog>
+                );
+              }
+              
+              // Draft or new product - show Publish button
+              return (
+                <AlertDialog open={showPublishDialog} onOpenChange={setShowPublishDialog}>
+                  <AlertDialogTrigger asChild>
+                    <Button
+                      variant="default"
+                      disabled={publishMutation.isPending || saveMutation.isPending || isLoading}
+                      data-testid="button-publish-product"
+                    >
+                      {publishMutation.isPending ? "Publishing..." : "Publish"}
+                    </Button>
+                  </AlertDialogTrigger>
+                  <AlertDialogContent>
+                    <AlertDialogHeader>
+                      <AlertDialogTitle>Publish Product?</AlertDialogTitle>
+                      <AlertDialogDescription>
+                        {originalProductId
+                          ? "This will merge the draft into the published product. Make sure all information is accurate and complete."
+                          : "This will make the product report publicly visible. Make sure all information is accurate and complete before publishing."}
+                      </AlertDialogDescription>
+                    </AlertDialogHeader>
+                    <AlertDialogFooter>
+                      <AlertDialogCancel>Cancel</AlertDialogCancel>
+                      <AlertDialogAction onClick={handlePublish}>
+                        Publish
+                      </AlertDialogAction>
+                    </AlertDialogFooter>
+                  </AlertDialogContent>
+                </AlertDialog>
+              );
+            })()}
           </div>
         </div>
 
@@ -371,19 +656,26 @@ export default function ProductForm({ params }: ProductFormParams) {
               <CardTitle>Product Details</CardTitle>
             </CardHeader>
             <CardContent className="space-y-6">
+              {isPublishedAndLocked && (
+                <div className="rounded-md border border-yellow-500/50 bg-yellow-500/10 p-4">
+                  <p className="text-sm text-yellow-600 dark:text-yellow-400">
+                    This product is published and locked. Unpublish it to make changes.
+                  </p>
+                </div>
+              )}
               <div className="grid gap-4 md:grid-cols-2">
                 <div className="space-y-2">
                   <Label htmlFor="name">Product Name</Label>
-                  <Input id="name" {...form.register("name", { required: true })} />
+                  <Input id="name" {...form.register("name", { required: true })} disabled={isPublishedAndLocked} />
                 </div>
                 <div className="space-y-2">
                   <Label htmlFor="brand">Brand</Label>
-                  <Input id="brand" {...form.register("brand", { required: true })} />
+                  <Input id="brand" {...form.register("brand", { required: true })} disabled={isPublishedAndLocked} />
                 </div>
               </div>
               <div className="space-y-2">
                 <Label htmlFor="imageUrl">Image URL</Label>
-                <Input id="imageUrl" {...form.register("imageUrl")} />
+                <Input id="imageUrl" {...form.register("imageUrl")} disabled={isPublishedAndLocked} />
               </div>
               <div className="space-y-2">
                 <Label htmlFor="summary">Summary</Label>
@@ -391,43 +683,85 @@ export default function ProductForm({ params }: ProductFormParams) {
                   id="summary"
                   rows={5}
                   {...form.register("summary", { required: true })}
+                  disabled={isPublishedAndLocked}
                 />
               </div>
               <div className="grid gap-4 md:grid-cols-2">
                 <div className="space-y-2">
                   <Label>Publication Status</Label>
-                  <Select
-                    defaultValue={form.getValues("status")}
-                    onValueChange={(value: "draft" | "published") =>
-                      form.setValue("status", value)
-                    }
-                  >
-                    <SelectTrigger>
-                      <SelectValue placeholder="Select status" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="draft">Draft</SelectItem>
-                      <SelectItem value="published">Published</SelectItem>
-                    </SelectContent>
-                  </Select>
+                  <div className="flex items-center gap-2">
+                    <div className="flex-1 rounded-md border bg-muted px-3 py-2 text-sm">
+                      {(() => {
+                        // If editing a draft, show original's status
+                        if (originalProductId && originalProductStatus) {
+                          return originalProductStatus === "published" ? "Published" : "Draft";
+                        }
+                        // If editing original published product
+                        if (productData?.status === "published" && !originalProductId) {
+                          return "Published";
+                        }
+                        // Otherwise show current status
+                        return productData?.status === "published" ? "Published" : "Draft";
+                      })()}
+                    </div>
+                    <span className="text-xs text-muted-foreground">
+                      {originalProductId 
+                        ? "Editing draft of published product. Publish to update the original."
+                        : productData?.status === "published" 
+                          ? hasUnsavedChanges
+                            ? "Changes made. Use 'Publish' to save changes."
+                            : "Use 'Unpublish' button to change"
+                          : "Use 'Publish' button to publish"}
+                    </span>
+                  </div>
                 </div>
                 <div className="space-y-2">
-                  <Label>Overall Safety</Label>
-                  <Select
-                    defaultValue={form.getValues("overallStatus")}
-                    onValueChange={(value: SafetyStatus) =>
-                      form.setValue("overallStatus", value)
-                    }
-                  >
-                    <SelectTrigger>
-                      <SelectValue placeholder="Select rating" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="safe">Safe</SelectItem>
-                      <SelectItem value="caution">Caution</SelectItem>
-                      <SelectItem value="banned">Banned</SelectItem>
-                    </SelectContent>
-                  </Select>
+                  <div className="flex items-center justify-between">
+                    <Label>Overall Safety</Label>
+                    {isOverallStatusOverridden && (
+                      <span className="text-xs text-muted-foreground italic">
+                        (Manually overridden)
+                      </span>
+                    )}
+                  </div>
+                  <div className="space-y-2">
+                    <Select
+                      value={form.watch("overallStatus")}
+                      onValueChange={(value: SafetyStatus) => {
+                        form.setValue("overallStatus", value);
+                        setIsOverallStatusOverridden(true);
+                      }}
+                      disabled={isPublishedAndLocked}
+                    >
+                      <SelectTrigger disabled={isPublishedAndLocked}>
+                        <SelectValue placeholder="Select rating" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="safe">Safe</SelectItem>
+                        <SelectItem value="caution">Caution</SelectItem>
+                        <SelectItem value="banned">Banned</SelectItem>
+                      </SelectContent>
+                    </Select>
+                    {!isOverallStatusOverridden && ingredients.length > 0 && (
+                      <p className="text-xs text-muted-foreground">
+                        Auto-calculated from ingredients: {calculatedOverallStatus}
+                      </p>
+                    )}
+                    {isOverallStatusOverridden && (
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="sm"
+                        className="h-7 text-xs"
+                        onClick={() => {
+                          form.setValue("overallStatus", calculatedOverallStatus);
+                          setIsOverallStatusOverridden(false);
+                        }}
+                      >
+                        Reset to auto-calculated ({calculatedOverallStatus})
+                      </Button>
+                    )}
+                  </div>
                 </div>
               </div>
             </CardContent>
@@ -475,12 +809,13 @@ export default function ProductForm({ params }: ProductFormParams) {
                 value={ingredientsText}
                 onChange={(event) => setIngredientsText(event.target.value)}
                 placeholder="Paste the full ingredient list here. Separate ingredients with commas or new lines."
+                disabled={isPublishedAndLocked}
               />
               <div className="flex flex-wrap items-center gap-3">
                 <Button
                   type="button"
                   onClick={() => vetMutation.mutate(ingredientsText)}
-                  disabled={vetMutation.isPending || !ingredientsText.trim()}
+                  disabled={vetMutation.isPending || !ingredientsText.trim() || isPublishedAndLocked}
                   data-testid="button-vet-ingredients"
                 >
                   {vetMutation.isPending ? "Analyzing..." : "Vet with AI"}
@@ -505,6 +840,7 @@ export default function ProductForm({ params }: ProductFormParams) {
                           name: event.target.value,
                         }))
                       }
+                      disabled={isPublishedAndLocked}
                     />
                   </div>
                   <div className="space-y-2">
@@ -514,8 +850,9 @@ export default function ProductForm({ params }: ProductFormParams) {
                       onValueChange={(value: SafetyStatus) =>
                         setNewIngredient((prev) => ({ ...prev, status: value }))
                       }
+                      disabled={isPublishedAndLocked}
                     >
-                      <SelectTrigger>
+                      <SelectTrigger disabled={isPublishedAndLocked}>
                         <SelectValue placeholder="Select status" />
                       </SelectTrigger>
                       <SelectContent>
@@ -538,6 +875,7 @@ export default function ProductForm({ params }: ProductFormParams) {
                         rationale: event.target.value,
                       }))
                     }
+                    disabled={isPublishedAndLocked}
                   />
                 </div>
                 <div className="space-y-2">
@@ -551,12 +889,14 @@ export default function ProductForm({ params }: ProductFormParams) {
                         sourceUrl: event.target.value,
                       }))
                     }
+                    disabled={isPublishedAndLocked}
                   />
                 </div>
                 <Button
                   type="button"
                   variant="secondary"
                   onClick={addManualIngredient}
+                  disabled={isPublishedAndLocked}
                 >
                   Add Ingredient
                 </Button>
@@ -606,6 +946,7 @@ export default function ProductForm({ params }: ProductFormParams) {
                         size="sm"
                         className="px-2"
                         onClick={() => handleCycleStatus(ingredient.id)}
+                        disabled={isPublishedAndLocked}
                       >
                         <SafetyBadge status={ingredient.status} showLabel />
                       </Button>
@@ -615,6 +956,7 @@ export default function ProductForm({ params }: ProductFormParams) {
                         size="sm"
                         className="text-destructive"
                         onClick={() => handleRemoveIngredient(ingredient.id)}
+                        disabled={isPublishedAndLocked}
                       >
                         Remove
                       </Button>

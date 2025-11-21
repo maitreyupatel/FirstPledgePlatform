@@ -19,28 +19,32 @@ interface Product {
   isDraft?: boolean;
 }
 
-export default function AdminDashboard() {
+function AdminDashboardContent() {
   const [activeTab, setActiveTab] = useState("all");
 
-  const { data: products, isLoading } = useQuery<Product[]>({
+  const { data: productsData, isLoading } = useQuery<Product[]>({
     queryKey: ["/api/products?includeUnpublished=true"],
   });
 
-  const draftMap = (products || [])
-    .filter(p => p.status === "draft" && p.editedFromProductId)
-    .reduce((acc, draft) => {
-      if (draft.editedFromProductId) {
-        acc[draft.editedFromProductId] = true;
-      }
-      return acc;
-    }, {} as Record<string, boolean>);
+  // Ensure products is always an array
+  const products: Product[] = Array.isArray(productsData) ? productsData : [];
 
   const publishedProducts = (products || []).filter(p => p.status === "published");
+  const draftProducts = (products || []).filter(p => p.status === "draft");
 
-  const filteredProducts = publishedProducts.filter((product) => {
-    if (activeTab === "all") return true;
-    return product.overallStatus === activeTab;
-  });
+  // Filter products based on active tab
+  let filteredProducts: Product[] = [];
+  if (activeTab === "drafts") {
+    filteredProducts = draftProducts;
+  } else if (activeTab === "all") {
+    // Show all products (published + drafts) in admin view
+    filteredProducts = products || [];
+  } else {
+    // Filter by safety status (only published products)
+    filteredProducts = publishedProducts.filter((product) => 
+      product.overallStatus === activeTab
+    );
+  }
 
   return (
     <div className="min-h-screen bg-muted/20">
@@ -60,10 +64,14 @@ export default function AdminDashboard() {
           </Link>
         </div>
 
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
+        <div className="grid grid-cols-1 md:grid-cols-4 gap-6 mb-8">
           <Card className="p-6">
             <div className="text-sm text-muted-foreground mb-1">Published Products</div>
             <div className="text-3xl font-bold">{publishedProducts.length}</div>
+          </Card>
+          <Card className="p-6">
+            <div className="text-sm text-muted-foreground mb-1">Draft Products</div>
+            <div className="text-3xl font-bold text-muted-foreground">{draftProducts.length}</div>
           </Card>
           <Card className="p-6">
             <div className="text-sm text-muted-foreground mb-1">Safe Products</div>
@@ -82,6 +90,7 @@ export default function AdminDashboard() {
         <Tabs value={activeTab} onValueChange={setActiveTab} className="space-y-6">
           <TabsList data-testid="tabs-filter" className="w-full sm:w-auto">
             <TabsTrigger value="all" data-testid="tab-all">All</TabsTrigger>
+            <TabsTrigger value="drafts" data-testid="tab-drafts">Drafts ({draftProducts.length})</TabsTrigger>
             <TabsTrigger value="safe" data-testid="tab-safe">Safe</TabsTrigger>
             <TabsTrigger value="caution" data-testid="tab-caution">Caution</TabsTrigger>
             <TabsTrigger value="banned" data-testid="tab-banned">Banned</TabsTrigger>
@@ -105,7 +114,6 @@ export default function AdminDashboard() {
                       safetyStatus={product.overallStatus}
                       isAdmin={true}
                       productStatus={product.status}
-                      hasDraft={draftMap[product.id] || false}
                     />
                   ))}
                 </div>
@@ -121,4 +129,8 @@ export default function AdminDashboard() {
       </div>
     </div>
   );
+}
+
+export default function AdminDashboard() {
+  return <AdminDashboardContent />;
 }

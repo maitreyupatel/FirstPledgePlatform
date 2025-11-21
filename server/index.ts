@@ -13,11 +13,12 @@ import {
   VetIngredientsRequest,
   SafetyStatus,
 } from "../shared/types";
-import { seedProducts } from "./seed";
+// Seed data removed - products will be added via admin portal
 import { MemStorage } from "./storage/memStorage";
 import { buildSourceUrl as buildEwgSourceUrl } from "./utils/ewgUrlBuilder";
 import { AIVettingService } from "./services/aiVettingService";
 import { CitationService } from "./services/citationService";
+import { requireAuth } from "./middleware/auth";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -26,19 +27,46 @@ const PORT = Number(process.env.PORT ?? 3000);
 const CLIENT_ORIGIN = process.env.CLIENT_ORIGIN ?? "http://localhost:5173";
 
 // Initialize AI and Citation services
-const geminiApiKey = process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY;
+// Default to Groq for generous free tier (14,400 requests/day, 30 requests/minute)
+const aiProviderType = (process.env.AI_PROVIDER || "groq") as "gemini" | "openai" | "groq";
+const geminiApiKey = process.env.GEMINI_API_KEY;
+const openaiApiKey = process.env.OPENAI_API_KEY;
+const groqApiKey = process.env.GROQ_API_KEY;
 const googleApiKey = process.env.GOOGLE_API_KEY;
 const googleCxId = process.env.GOOGLE_CX_ID;
+
+// Select API key based on provider
+let aiApiKey: string | undefined;
+switch (aiProviderType) {
+  case "openai":
+    aiApiKey = openaiApiKey;
+    break;
+  case "groq":
+    aiApiKey = groqApiKey;
+    break;
+  case "gemini":
+  default:
+    aiApiKey = geminiApiKey;
+    break;
+}
 
 let aiVettingService: AIVettingService | null = null;
 let citationService: CitationService | null = null;
 
 try {
-  if (geminiApiKey) {
-    aiVettingService = new AIVettingService(geminiApiKey);
-    console.log("✅ AI Vetting Service initialized");
+  if (aiApiKey) {
+    const useAnalysisStorage = process.env.USE_SUPABASE_STORAGE === "true";
+    aiVettingService = new AIVettingService(aiProviderType, aiApiKey, googleApiKey, googleCxId, useAnalysisStorage);
+    console.log(`✅ AI Vetting Service initialized with ${aiProviderType.toUpperCase()} provider`);
+    if (aiProviderType === "groq") {
+      console.log(`   📊 Groq free tier: 14,400 requests/day, 30 requests/minute`);
+    }
   } else {
-    console.warn("⚠️  GEMINI_API_KEY not set. AI vetting will use fallback keyword matching.");
+    console.warn(`⚠️  ${aiProviderType.toUpperCase()}_API_KEY not set. AI vetting will use fallback keyword matching.`);
+    if (aiProviderType === "groq") {
+      console.warn(`   💡 Get your free Groq API key at: https://console.groq.com`);
+      console.warn(`   💡 Add GROQ_API_KEY=your_key to your .env file`);
+    }
   }
 } catch (error) {
   console.error("❌ Failed to initialize AI Vetting Service:", error);
@@ -56,7 +84,40 @@ try {
 }
 
 const app = express();
-const storage = new MemStorage(seedProducts);
+
+// Use Supabase storage if enabled, otherwise fallback to MemStorage
+const useSupabaseStorage = process.env.USE_SUPABASE_STORAGE === "true";
+let storage: MemStorage | any;
+
+// Initialize storage - start with MemStorage, upgrade to Supabase if enabled
+storage = new MemStorage([]);
+
+if (useSupabaseStorage) {
+  // Check if Supabase credentials are configured
+  const supabaseUrl = process.env.SUPABASE_URL;
+  const supabaseServiceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+  
+  if (!supabaseUrl || !supabaseServiceRoleKey) {
+    console.warn("⚠️  Supabase credentials not configured. Using MemStorage.");
+    console.warn("   Set SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY in .env to use Supabase");
+  } else {
+    // Initialize Supabase storage asynchronously
+    import("./storage/supabaseStorage")
+      .then((module) => {
+        try {
+          storage = new module.SupabaseStorage();
+          console.log("✅ Using Supabase storage");
+        } catch (error) {
+          console.error("❌ Failed to initialize Supabase storage, using MemStorage:", error);
+        }
+      })
+      .catch((error) => {
+        console.error("❌ Failed to load Supabase storage module, using MemStorage:", error);
+      });
+  }
+} else {
+  console.log("📦 Using in-memory storage (MemStorage)");
+}
 
 app.use(
   cors({
@@ -70,27 +131,39 @@ app.get("/api/health", (_req, res) => {
   res.json({ status: "ok", timestamp: new Date().toISOString() });
 });
 
-app.get("/api/products", (req, res) => {
-  const includeUnpublished = req.query.includeUnpublished === "true";
-  const products = storage.list({ includeUnpublished });
-  res.json(products);
-});
-
-app.get("/api/products/:id", (req, res) => {
-  const includeUnpublished = req.query.includeUnpublished === "true";
-  const product = storage.getById(req.params.id, { includeUnpublished });
-
-  if (!product) {
-    res.status(404).json({ error: "Product not found" });
-    return;
-  }
-
-  res.json(product);
-});
-
-app.post("/api/products", (req, res) => {
+// Public routes (no auth required)
+app.get("/api/products", async (req, res) => {
   try {
-    const product = storage.create({
+    const includeUnpublished = req.query.includeUnpublished === "true";
+    const products = await storage.list({ includeUnpublished });
+    res.json(products);
+  } catch (error) {
+    console.error("Error listing products:", error);
+    res.status(500).json({ error: "Failed to list products" });
+  }
+});
+
+app.get("/api/products/:id", async (req, res) => {
+  try {
+    const includeUnpublished = req.query.includeUnpublished === "true";
+    const product = await storage.getById(req.params.id, { includeUnpublished });
+
+    if (!product) {
+      res.status(404).json({ error: "Product not found" });
+      return;
+    }
+
+    res.json(product);
+  } catch (error) {
+    console.error("Error fetching product:", error);
+    res.status(500).json({ error: "Failed to fetch product" });
+  }
+});
+
+// Admin routes (auth required)
+app.post("/api/products", requireAuth, async (req, res) => {
+  try {
+    const product = await storage.create({
       name: req.body.name,
       brand: req.body.brand,
       summary: req.body.summary ?? "",
@@ -107,43 +180,147 @@ app.post("/api/products", (req, res) => {
   }
 });
 
-app.patch("/api/products/:id", (req, res) => {
-  const product = storage.update(req.params.id, {
-    name: req.body.name,
-    brand: req.body.brand,
-    summary: req.body.summary,
-    imageUrl: req.body.imageUrl,
-    overallStatus: req.body.overallStatus,
-    status: req.body.status,
-    ingredients: req.body.ingredients,
-  });
+app.patch("/api/products/:id", requireAuth, async (req, res) => {
+  try {
+    const product = await storage.update(req.params.id, {
+      name: req.body.name,
+      brand: req.body.brand,
+      summary: req.body.summary,
+      imageUrl: req.body.imageUrl,
+      overallStatus: req.body.overallStatus,
+      status: req.body.status,
+      ingredients: req.body.ingredients,
+    });
 
-  if (!product) {
-    res.status(404).json({ error: "Product not found" });
-    return;
+    if (!product) {
+      res.status(404).json({ error: "Product not found" });
+      return;
+    }
+
+    res.json(product);
+  } catch (error) {
+    console.error("Error updating product:", error);
+    res.status(500).json({ error: "Failed to update product" });
   }
-
-  res.json(product);
 });
 
-app.delete("/api/products/:id", (req, res) => {
-  const deleted = storage.delete(req.params.id);
-  if (!deleted) {
-    res.status(404).json({ error: "Product not found" });
-    return;
-  }
+app.delete("/api/products/:id", requireAuth, async (req, res) => {
+  try {
+    const deleted = await storage.delete(req.params.id);
+    if (!deleted) {
+      res.status(404).json({ error: "Product not found" });
+      return;
+    }
 
-  res.status(204).send();
+    res.status(204).send();
+  } catch (error) {
+    console.error("Error deleting product:", error);
+    res.status(500).json({ error: "Failed to delete product" });
+  }
 });
 
-app.post("/api/products/:id/edit", (req, res) => {
-  const draft = storage.createDraftFromProduct(req.params.id);
-  if (!draft) {
-    res.status(404).json({ error: "Product not found" });
-    return;
-  }
+app.post("/api/products/:id/edit", requireAuth, async (req, res) => {
+  try {
+    const draft = await storage.createDraftFromProduct(req.params.id);
+    if (!draft) {
+      res.status(404).json({ error: "Product not found" });
+      return;
+    }
 
-  res.status(201).json(draft);
+    res.status(201).json(draft);
+  } catch (error) {
+    console.error("Error creating draft:", error);
+    res.status(500).json({ error: "Failed to create draft" });
+  }
+});
+
+app.post("/api/products/:id/merge", requireAuth, async (req, res) => {
+  try {
+    const merged = await storage.mergeDraftIntoOriginal(req.params.id);
+    if (!merged) {
+      res.status(404).json({ error: "Draft not found or invalid" });
+      return;
+    }
+
+    res.json(merged);
+  } catch (error) {
+    console.error("Error merging draft:", error);
+    res.status(500).json({ error: "Failed to merge draft" });
+  }
+});
+
+// Admin API for ingredient analysis management
+app.get("/api/admin/ingredient-analyses/:name", requireAuth, async (req, res) => {
+  try {
+    if (!aiVettingService || !(aiVettingService as any).analysisService) {
+      return res.status(503).json({ error: "Ingredient analysis storage not available" });
+    }
+
+    const analysisService = (aiVettingService as any).analysisService;
+    const analysis = await analysisService.getAnalysis(req.params.name);
+
+    if (!analysis) {
+      return res.status(404).json({ error: "Analysis not found" });
+    }
+
+    res.json(analysis);
+  } catch (error) {
+    console.error("Error fetching analysis:", error);
+    res.status(500).json({ error: "Failed to fetch analysis" });
+  }
+});
+
+app.post("/api/admin/ingredient-analyses/:name/refresh", requireAuth, async (req, res) => {
+  try {
+    if (!aiVettingService) {
+      return res.status(503).json({ error: "AI Vetting Service not available" });
+    }
+
+    // Force re-analysis by analyzing the ingredient
+    const analysis = await aiVettingService.analyzeIngredient(req.params.name);
+    res.json(analysis);
+  } catch (error) {
+    console.error("Error refreshing analysis:", error);
+    res.status(500).json({ error: "Failed to refresh analysis" });
+  }
+});
+
+app.get("/api/admin/ingredient-analyses", requireAuth, async (req, res) => {
+  try {
+    if (!aiVettingService || !(aiVettingService as any).analysisService) {
+      return res.status(503).json({ error: "Ingredient analysis storage not available" });
+    }
+
+    const analysisService = (aiVettingService as any).analysisService;
+    const supabase = (analysisService as any).supabase;
+    
+    const page = parseInt(req.query.page as string || "1", 10);
+    const limit = parseInt(req.query.limit as string || "50", 10);
+    const offset = (page - 1) * limit;
+
+    const { data, error, count } = await supabase
+      .from("ingredient_analyses")
+      .select("*", { count: "exact" })
+      .order("updated_at", { ascending: false })
+      .range(offset, offset + limit - 1);
+
+    if (error) {
+      throw error;
+    }
+
+    res.json({
+      data: data || [],
+      pagination: {
+        page,
+        limit,
+        total: count || 0,
+        totalPages: Math.ceil((count || 0) / limit),
+      },
+    });
+  } catch (error) {
+    console.error("Error listing analyses:", error);
+    res.status(500).json({ error: "Failed to list analyses" });
+  }
 });
 
 app.post("/api/vet-ingredients", async (req, res) => {
@@ -179,8 +356,9 @@ app.post("/api/vet-ingredients", async (req, res) => {
           
           // If citation service is available and URL doesn't look like a real EWG URL, try to find better citation
           if (citationService) {
-            // Only search if the URL is a generic search URL or doesn't contain ewg.org
-            if (!sourceUrl.includes("ewg.org/skindeep/ingredients/") || sourceUrl.includes("/search/")) {
+            // Only search if the URL is NOT a proper EWG ingredient page (i.e., it's a search URL or generic URL)
+            const isProperEwgIngredientPage = sourceUrl.includes("ewg.org/skindeep/ingredients/") && !sourceUrl.includes("/search/");
+            if (!isProperEwgIngredientPage) {
               try {
                 const betterUrl = await citationService.findBestCitation(analysis.name);
                 sourceUrl = betterUrl;
@@ -201,6 +379,12 @@ app.post("/api/vet-ingredients", async (req, res) => {
             isOverride: false,
             createdAt: new Date().toISOString(),
             updatedAt: new Date().toISOString(),
+            // Include new fields if available (these may not be in the Ingredient type yet)
+            ...(analysis.description && { description: analysis.description }),
+            ...(analysis.edgeCases && { edgeCases: analysis.edgeCases }),
+            ...(analysis.ewgScore !== undefined && { ewgScore: analysis.ewgScore }),
+            ...(analysis.researchSources && { researchSources: analysis.researchSources }),
+            ...(analysis.suggestedMatches && { suggestedMatches: analysis.suggestedMatches }),
           };
         })
       );
