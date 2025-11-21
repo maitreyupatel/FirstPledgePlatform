@@ -120,30 +120,49 @@ The application cannot run without Supabase storage.
 // Initialize Supabase storage (mandatory)
 // Use a function to initialize storage lazily to avoid crashing the function on startup
 let storage: SupabaseStorage | null = null;
+let storageInitError: Error | null = null;
 
 function getStorage(): SupabaseStorage {
-  if (!storage) {
-    try {
-      console.log("Initializing Supabase storage...");
-      console.log("SUPABASE_URL:", process.env.SUPABASE_URL ? "✅ Set" : "❌ Missing");
-      console.log("SUPABASE_SERVICE_ROLE_KEY:", process.env.SUPABASE_SERVICE_ROLE_KEY ? "✅ Set" : "❌ Missing");
-      
-      storage = new SupabaseStorage();
-      console.log("✅ Supabase storage initialized successfully");
-    } catch (error) {
-      const errorMessage = `
+  // If we already have an initialization error, throw it
+  if (storageInitError) {
+    throw storageInitError;
+  }
+  
+  // If storage is already initialized, return it
+  if (storage) {
+    return storage;
+  }
+  
+  // Try to initialize storage
+  try {
+    console.log("Initializing Supabase storage...");
+    console.log("SUPABASE_URL:", process.env.SUPABASE_URL ? "✅ Set" : "❌ Missing");
+    console.log("SUPABASE_SERVICE_ROLE_KEY:", process.env.SUPABASE_SERVICE_ROLE_KEY ? "✅ Set (length: " + process.env.SUPABASE_SERVICE_ROLE_KEY.length + ")" : "❌ Missing");
+    
+    if (!process.env.SUPABASE_URL || !process.env.SUPABASE_SERVICE_ROLE_KEY) {
+      const error = new Error("Missing required Supabase environment variables. Check SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY.");
+      storageInitError = error;
+      throw error;
+    }
+    
+    storage = new SupabaseStorage();
+    console.log("✅ Supabase storage initialized successfully");
+    return storage;
+  } catch (error) {
+    const errorMessage = `
 ❌ CRITICAL: Failed to initialize Supabase storage.
 
 Error: ${error instanceof Error ? error.message : String(error)}
 Stack: ${error instanceof Error ? error.stack : "N/A"}
 
-Please verify your Supabase credentials are correct.
-      `.trim();
-      console.error(errorMessage);
-      throw new Error(`Failed to initialize Supabase storage: ${error instanceof Error ? error.message : String(error)}`);
-    }
+Please verify your Supabase credentials are correct in Vercel environment variables.
+    `.trim();
+    console.error(errorMessage);
+    
+    // Store the error so we don't keep trying to initialize
+    storageInitError = error instanceof Error ? error : new Error(String(error));
+    throw storageInitError;
   }
-  return storage;
 }
 
 app.use(
@@ -158,6 +177,35 @@ app.get("/api/health", (_req, res) => {
   res.json({ status: "ok", timestamp: new Date().toISOString() });
 });
 
+// Diagnostic endpoint to check storage status
+app.get("/api/debug/storage", (_req, res) => {
+  try {
+    const hasUrl = !!process.env.SUPABASE_URL;
+    const hasKey = !!process.env.SUPABASE_SERVICE_ROLE_KEY;
+    const storageReady = !!storage;
+    const hasInitError = !!storageInitError;
+    
+    res.json({
+      storage: {
+        initialized: storageReady,
+        hasInitError: hasInitError,
+        initErrorMessage: storageInitError?.message || null
+      },
+      environment: {
+        hasSupabaseUrl: hasUrl,
+        hasServiceRoleKey: hasKey,
+        supabaseUrlLength: process.env.SUPABASE_URL?.length || 0,
+        serviceRoleKeyLength: process.env.SUPABASE_SERVICE_ROLE_KEY?.length || 0
+      }
+    });
+  } catch (error) {
+    res.status(500).json({ 
+      error: "Failed to get storage status",
+      details: error instanceof Error ? error.message : String(error)
+    });
+  }
+});
+
 // Public routes (no auth required)
 app.get("/api/products", async (req, res) => {
   try {
@@ -168,16 +216,30 @@ app.get("/api/products", async (req, res) => {
     console.log(`Found ${products.length} products`);
     res.json(products);
   } catch (error) {
-    console.error("Error listing products:", error);
+    console.error("Error in /api/products:", error);
     const errorDetails = error instanceof Error ? {
       message: error.message,
-      name: error.name
+      name: error.name,
+      stack: process.env.NODE_ENV === 'development' ? error.stack : undefined
     } : { message: String(error) };
     
-    res.status(500).json({ 
-      error: "Failed to list products",
-      details: errorDetails
-    });
+    // Check if it's a storage initialization error
+    if (error instanceof Error && error.message.includes("Supabase")) {
+      res.status(500).json({ 
+        error: "Database connection failed",
+        message: "Unable to connect to Supabase. Please check environment variables.",
+        details: {
+          hasSupabaseUrl: !!process.env.SUPABASE_URL,
+          hasServiceRoleKey: !!process.env.SUPABASE_SERVICE_ROLE_KEY,
+          errorMessage: error.message
+        }
+      });
+    } else {
+      res.status(500).json({ 
+        error: "Failed to list products",
+        details: errorDetails
+      });
+    }
   }
 });
 
