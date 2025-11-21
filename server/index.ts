@@ -98,24 +98,9 @@ try {
 
 const app = express();
 
-// Validate required Supabase environment variables
-  const supabaseUrl = process.env.SUPABASE_URL;
-  const supabaseServiceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
-  
-  if (!supabaseUrl || !supabaseServiceRoleKey) {
-  const errorMessage = `
-❌ CRITICAL: Supabase credentials are required but not configured.
-
-Required environment variables:
-  - SUPABASE_URL
-  - SUPABASE_SERVICE_ROLE_KEY
-
-Please set these in your .env file or environment variables.
-The application cannot run without Supabase storage.
-  `.trim();
-  console.error(errorMessage);
-  throw new Error("Missing required Supabase configuration. Set SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY.");
-}
+// Note: Supabase validation is now done lazily in getStorage() function
+// This allows the Express app to start even if Supabase is not configured
+// Routes will handle errors gracefully
 
 // Initialize Supabase storage (mandatory)
 // Use a function to initialize storage lazily to avoid crashing the function on startup
@@ -165,6 +150,12 @@ Please verify your Supabase credentials are correct in Vercel environment variab
   }
 }
 
+// Request logging middleware (for debugging)
+app.use((req, res, next) => {
+  console.log(`${new Date().toISOString()} ${req.method} ${req.path}`);
+  next();
+});
+
 app.use(
   cors({
     origin: CLIENT_ORIGIN.split(","),
@@ -177,33 +168,44 @@ app.get("/api/health", (_req, res) => {
   res.json({ status: "ok", timestamp: new Date().toISOString() });
 });
 
-// Diagnostic endpoint to check storage status
+// Diagnostic endpoint to check storage status (works even if storage fails)
 app.get("/api/debug/storage", (_req, res) => {
-  try {
-    const hasUrl = !!process.env.SUPABASE_URL;
-    const hasKey = !!process.env.SUPABASE_SERVICE_ROLE_KEY;
-    const storageReady = !!storage;
-    const hasInitError = !!storageInitError;
-    
-    res.json({
-      storage: {
-        initialized: storageReady,
-        hasInitError: hasInitError,
-        initErrorMessage: storageInitError?.message || null
-      },
-      environment: {
-        hasSupabaseUrl: hasUrl,
-        hasServiceRoleKey: hasKey,
-        supabaseUrlLength: process.env.SUPABASE_URL?.length || 0,
-        serviceRoleKeyLength: process.env.SUPABASE_SERVICE_ROLE_KEY?.length || 0
-      }
-    });
-  } catch (error) {
-    res.status(500).json({ 
-      error: "Failed to get storage status",
-      details: error instanceof Error ? error.message : String(error)
-    });
+  // This endpoint should never throw - it's for diagnostics
+  const hasUrl = !!process.env.SUPABASE_URL;
+  const hasKey = !!process.env.SUPABASE_SERVICE_ROLE_KEY;
+  const storageReady = !!storage;
+  const hasInitError = !!storageInitError;
+  
+  // Try to get storage info without throwing
+  let storageInfo: any = {
+    initialized: storageReady,
+    hasInitError: hasInitError,
+    initErrorMessage: storageInitError?.message || null
+  };
+  
+  // Try to initialize if not already done (for testing)
+  if (!storageReady && !hasInitError && hasUrl && hasKey) {
+    try {
+      const testStorage = getStorage();
+      storageInfo.initialized = !!testStorage;
+    } catch (err) {
+      storageInfo.hasInitError = true;
+      storageInfo.initErrorMessage = err instanceof Error ? err.message : String(err);
+    }
   }
+  
+  res.json({
+    status: "ok",
+    storage: storageInfo,
+    environment: {
+      hasSupabaseUrl: hasUrl,
+      hasServiceRoleKey: hasKey,
+      supabaseUrlLength: process.env.SUPABASE_URL?.length || 0,
+      serviceRoleKeyLength: process.env.SUPABASE_SERVICE_ROLE_KEY?.length || 0,
+      nodeEnv: process.env.NODE_ENV || "not set",
+      vercel: process.env.VERCEL || "not set"
+    }
+  });
 });
 
 // Public routes (no auth required)
@@ -558,14 +560,33 @@ app.get("*", (_req, res) => {
   });
 });
 
+// Global error handler middleware (must be last, before export)
+app.use((err: Error, req: express.Request, res: express.Response, next: express.NextFunction) => {
+  console.error("Unhandled error:", err);
+  res.status(500).json({
+    error: "Internal server error",
+    message: err.message || "An unexpected error occurred",
+    ...(process.env.NODE_ENV === 'development' && { stack: err.stack })
+  });
+});
+
+// 404 handler for undefined routes
+app.use((req: express.Request, res: express.Response) => {
+  res.status(404).json({
+    error: "Not found",
+    path: req.path,
+    method: req.method
+  });
+});
+
 // Export app for Vercel serverless function
 export default app;
 
 // Only listen on port when running locally (not in Vercel environment)
 if (process.env.VERCEL !== "1") {
-app.listen(PORT, () => {
-  console.log(`✅ API server listening on http://localhost:${PORT}`);
-});
+  app.listen(PORT, () => {
+    console.log(`✅ API server listening on http://localhost:${PORT}`);
+  });
 } else {
   console.log("✅ Running in Vercel serverless environment");
 }
