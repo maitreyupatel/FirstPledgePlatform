@@ -101,8 +101,13 @@ async function verifySetup() {
       console.error(`   ❌ ${key} is not set`);
       allChecksPassed = false;
     } else {
-      const displayValue = key.includes("KEY") ? `${value.substring(0, 20)}...` : value;
-      console.log(`   ✅ ${key} = ${displayValue}`);
+      // Never expose API keys in logs - only show that they're set
+      if (key.includes("KEY")) {
+        const maskedValue = "*".repeat(Math.min(value.length, 20)) + "...";
+        console.log(`   ✅ ${key} = ${maskedValue} (length: ${value.length})`);
+      } else {
+        console.log(`   ✅ ${key} = ${value}`);
+      }
     }
   }
 
