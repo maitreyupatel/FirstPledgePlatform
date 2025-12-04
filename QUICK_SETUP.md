@@ -27,9 +27,9 @@ USE_SUPABASE_STORAGE=true
 # Ingredient refresh window
 INGREDIENT_REFRESH_DAYS=30
 
-# Frontend (already set in .env.example)
-VITE_SUPABASE_URL=https://ilswgsidzdwovkwivggh.supabase.co
-VITE_SUPABASE_ANON_KEY=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imlsc3dnc2lkemR3b3Zrd2l2Z2doIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjM2MjUzNzYsImV4cCI6MjA3OTIwMTM3Nn0.C4fFLWZ8Es2un_FjxFQmJZeoSMw2T0K2qT51svoXqRM
+# Frontend (get these from Supabase Dashboard > Settings > API)
+VITE_SUPABASE_URL=https://your-project-id.supabase.co
+VITE_SUPABASE_ANON_KEY=your-anon-key-here
 ```
 
 ## Step 3: Create Admin User

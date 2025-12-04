@@ -2,18 +2,44 @@
  * Quick Auth Setup Script
  * Run this in your browser console to set up authentication
  * 
- * Usage: Copy and paste this entire script into browser console
+ * Usage: 
+ * 1. Get your Supabase Service Role Key from your local .env file (SUPABASE_SERVICE_ROLE_KEY)
+ * 2. Copy and paste this script into browser console
+ * 3. When prompted, paste your Service Role Key
+ * 
+ * IMPORTANT: Never commit your actual API keys to the repository!
+ * This script prompts you to enter the key locally.
  */
 
 (function() {
-  // Your Supabase Service Role Key (from .env file)
-  const SERVICE_ROLE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imlsc3dnc2lkemR3b3Zrd2l2Z2doIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc2MzYyNTM3NiwiZXhwIjoyMDc5MjAxMzc2fQ.NDSBPVPNwzwZEyUU7Sb_wKPEwWjdwBqf_7Nh3OYo5kg';
+  // Prompt user to enter their Service Role Key (from local .env file)
+  const SERVICE_ROLE_KEY = prompt(
+    'Enter your Supabase Service Role Key (from .env file):\n' +
+    '⚠️  This key is stored locally in your browser only.\n' +
+    'Find it in Supabase Dashboard > Settings > API > service_role key'
+  );
   
-  // Set the token in localStorage
-  localStorage.setItem('dev_api_key', SERVICE_ROLE_KEY);
+  if (!SERVICE_ROLE_KEY || SERVICE_ROLE_KEY.trim() === '') {
+    console.error('❌ No key provided. Authentication setup cancelled.');
+    return;
+  }
+  
+  // Validate it looks like a JWT token
+  if (!SERVICE_ROLE_KEY.startsWith('eyJ')) {
+    console.warn('⚠️  Warning: This does not look like a valid JWT token.');
+    const proceed = confirm('Do you want to continue anyway?');
+    if (!proceed) {
+      console.log('Setup cancelled.');
+      return;
+    }
+  }
+  
+  // Set the token in localStorage (local only, never committed)
+  localStorage.setItem('dev_api_key', SERVICE_ROLE_KEY.trim());
   
   console.log('✅ Authentication token set successfully!');
   console.log('🔄 Please refresh the page for changes to take effect.');
   console.log('🧪 Try deleting/editing a product to verify it works.');
+  console.log('🔒 Key stored locally in browser only - not committed to repo.');
 })();
 

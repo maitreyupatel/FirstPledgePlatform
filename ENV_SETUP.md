@@ -7,9 +7,13 @@
 2. **Add your API keys** to the `.env` file:
 
 ```env
-GEMINI_API_KEY=AIzaSyCYuP6B8kjayvFrGbOwtwlN_7IZW0Tphsc
-GOOGLE_API_KEY=AIzaSyBgpoTYaRi8yZgc6QViOsbiCRNkuJgk__k
-GOOGLE_CX_ID=b173024cc18164876
+# Get your API keys from:
+# - GEMINI_API_KEY: https://makersuite.google.com/app/apikey
+# - GOOGLE_API_KEY: https://console.cloud.google.com/apis/credentials
+# - GOOGLE_CX_ID: https://programmablesearchengine.google.com/controlpanel/create
+GEMINI_API_KEY=your-gemini-api-key-here
+GOOGLE_API_KEY=your-google-api-key-here
+GOOGLE_CX_ID=your-custom-search-engine-id-here
 
 PORT=3000
 CLIENT_ORIGIN=http://localhost:5173
