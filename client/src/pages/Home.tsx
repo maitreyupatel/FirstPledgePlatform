@@ -16,17 +16,20 @@ const HOW_IT_WORKS = [
   {
     step: "01",
     title: "AI Research",
-    description: "Our AI engine analyzes every ingredient against safety databases and peer-reviewed scientific literature.",
+    description:
+      "Our AI engine analyzes every ingredient against safety databases and peer-reviewed scientific literature.",
   },
   {
     step: "02",
     title: "Editorial Review",
-    description: "Expert reviewers verify AI findings, resolve edge cases, and ensure accuracy before publication.",
+    description:
+      "Expert reviewers verify AI findings, resolve edge cases, and ensure accuracy before publication.",
   },
   {
     step: "03",
     title: "Transparent Evidence",
-    description: "Every rating includes clickable citations linking directly to original research sources.",
+    description:
+      "Every rating includes clickable citations linking directly to original research sources.",
   },
 ];
 
@@ -46,16 +49,23 @@ export default function Home() {
       <Header showAdminLink />
       <Hero />
 
-
       {/* Stats strip */}
-      <div className="relative z-20 container max-w-3xl mx-auto px-4 md:px-6 mb-12 -mt-2">
-        <div className="glass rounded-3xl p-1">
-          <div className="grid grid-cols-3 divide-x divide-white/10">
-            {STATS.map(({ icon: Icon, value, label }) => (
-              <div key={label} className="flex flex-col items-center gap-1 py-5 px-4">
-                <Icon className="h-4 w-4 text-primary mb-1 opacity-70" />
-                <span className="font-display font-extrabold text-2xl tracking-tight text-foreground">{value}</span>
-                <span className="text-xs text-muted-foreground font-medium text-center">{label}</span>
+      <div className="relative z-20 container max-w-3xl mx-auto px-4 md:px-6 mb-16 -mt-2">
+        <div className="glass glass-shimmer rounded-3xl p-1">
+          <div className="grid grid-cols-3 divide-x divide-white/8">
+            {STATS.map(({ icon: Icon, value, label }, i) => (
+              <div
+                key={label}
+                className="flex flex-col items-center gap-1.5 py-6 px-4 animate-fade-up"
+                style={{ animationDelay: `${i * 60}ms`, animationFillMode: "both" }}
+              >
+                <Icon className="h-4 w-4 text-primary mb-0.5 opacity-60" />
+                <span className="font-display font-extrabold text-2xl md:text-3xl tracking-tight stat-gradient">
+                  {value}
+                </span>
+                <span className="text-xs text-muted-foreground font-medium text-center">
+                  {label}
+                </span>
               </div>
             ))}
           </div>
@@ -65,7 +75,7 @@ export default function Home() {
       {/* Products section */}
       <section id="products" className="py-16 md:py-20">
         <div className="container max-w-7xl mx-auto px-4 md:px-6">
-          <div className="flex flex-col md:flex-row md:items-end md:justify-between gap-4 mb-12">
+          <div className="flex flex-col md:flex-row md:items-end md:justify-between gap-4 mb-14">
             <div className="space-y-3 max-w-lg">
               <div className="inline-flex items-center gap-2 glass-subtle px-3 py-1 rounded-full">
                 <span className="w-1.5 h-1.5 rounded-full bg-primary" />
@@ -77,7 +87,8 @@ export default function Home() {
                 Recently Vetted
               </h2>
               <p className="text-muted-foreground leading-relaxed">
-                Each product has been thoroughly analyzed by our AI research engine and reviewed by our editorial team.
+                Each product has been thoroughly analyzed by our AI research engine and reviewed
+                by our editorial team.
               </p>
             </div>
           </div>
@@ -105,7 +116,7 @@ export default function Home() {
                 <div
                   key={product.id}
                   className="animate-fade-up"
-                  style={{ animationDelay: `${i * 60}ms`, animationFillMode: "both" }}
+                  style={{ animationDelay: `${i * 70}ms`, animationFillMode: "both" }}
                 >
                   <ProductCard
                     id={product.id}
@@ -118,7 +129,7 @@ export default function Home() {
               ))}
             </div>
           ) : (
-            <div className="glass rounded-3xl py-20 text-center">
+            <div className="glass rounded-3xl py-24 text-center">
               <p className="text-muted-foreground">No products available yet. Check back soon!</p>
             </div>
           )}
@@ -126,9 +137,9 @@ export default function Home() {
       </section>
 
       {/* How It Works */}
-      <section id="how-it-works" className="py-16 md:py-24">
+      <section id="how-it-works" className="py-20 md:py-28">
         <div className="container max-w-7xl mx-auto px-4 md:px-6">
-          <div className="text-center space-y-3 mb-16">
+          <div className="text-center space-y-4 mb-20">
             <div className="inline-flex items-center gap-2 glass-subtle px-3 py-1 rounded-full">
               <span className="w-1.5 h-1.5 rounded-full bg-primary" />
               <span className="text-xs font-semibold uppercase tracking-widest text-muted-foreground">
@@ -138,6 +149,9 @@ export default function Home() {
             <h2 className="font-display font-bold text-3xl md:text-4xl tracking-tight">
               How It Works
             </h2>
+            <p className="text-muted-foreground max-w-md mx-auto leading-relaxed">
+              Three steps from raw ingredient list to a fully-cited safety report.
+            </p>
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-3 gap-6 relative">
@@ -147,16 +161,25 @@ export default function Home() {
             {HOW_IT_WORKS.map(({ step, title, description }, i) => (
               <div
                 key={step}
-                className="glass rounded-3xl p-8 flex flex-col gap-5 group hover:scale-[1.02] transition-transform duration-500 ease-spring animate-fade-up"
-                style={{ animationDelay: `${i * 100}ms`, animationFillMode: "both" }}
+                className="glass glass-shimmer rounded-3xl p-8 flex flex-col gap-5 group hover:scale-[1.02] transition-all duration-500 ease-spring animate-fade-up relative overflow-hidden"
+                style={{ animationDelay: `${i * 110}ms`, animationFillMode: "both" }}
               >
+                {/* Step number glow */}
                 <div className="flex items-center gap-3">
-                  <div className="w-10 h-10 rounded-2xl glass-subtle flex items-center justify-center ring-1 ring-primary/20 group-hover:ring-primary/40 transition-all duration-300">
-                    <span className="font-display font-extrabold text-sm text-primary">{step}</span>
+                  <div
+                    className="w-11 h-11 rounded-2xl glass-subtle flex items-center justify-center ring-1 ring-primary/20 group-hover:ring-primary/50 transition-all duration-400"
+                    style={{
+                      boxShadow: "0 0 0 0 hsl(158 82% 48% / 0)",
+                      transition: "box-shadow 0.4s ease, ring-color 0.4s ease",
+                    }}
+                  >
+                    <span className="font-display font-extrabold text-sm text-gradient-animated">
+                      {step}
+                    </span>
                   </div>
-                  <ArrowRight className="h-4 w-4 text-primary/30 group-hover:text-primary/60 transition-colors duration-300 hidden md:block" />
+                  <ArrowRight className="h-4 w-4 text-primary/25 group-hover:text-primary/55 transition-colors duration-300 hidden md:block" />
                 </div>
-                <div className="space-y-2">
+                <div className="space-y-2.5">
                   <h3 className="font-display font-700 text-lg tracking-tight">{title}</h3>
                   <p className="text-sm text-muted-foreground leading-relaxed">{description}</p>
                 </div>
@@ -166,13 +189,13 @@ export default function Home() {
         </div>
       </section>
 
-      {/* Footer strip */}
-      <footer className="py-8 border-t border-white/6">
+      {/* Footer */}
+      <footer className="py-10 border-t border-white/6">
         <div className="container max-w-7xl mx-auto px-4 md:px-6 flex flex-col md:flex-row items-center justify-between gap-3">
-          <p className="text-xs text-muted-foreground/60">
+          <p className="text-xs text-muted-foreground/50">
             © 2026 FirstPledge. Trust-as-a-Service.
           </p>
-          <p className="text-xs text-muted-foreground/40">
+          <p className="text-xs text-muted-foreground/35">
             AI-powered · Science-backed · Independently verified
           </p>
         </div>

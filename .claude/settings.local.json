@@ -1,0 +1,32 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash([ -d \"d:/Github Projects/gstack/$dir\" ])",
+      "Bash(bun --version)",
+      "Read(//c/Users/maitr/.claude/**)",
+      "Bash(git -C __TRACKED_VAR__/.claude/skills/gstack log --oneline -3)",
+      "Bash(winget install *)",
+      "Bash(export PATH=\"$BUN_DIR:$PATH\")",
+      "Bash(bash setup *)",
+      "Bash(bunx playwright *)",
+      "Bash(bun x *)",
+      "Bash(cat)",
+      "Bash(chmod +x /c/Users/maitr/AppData/Local/Microsoft/WinGet/Packages/Oven-sh.Bun_Microsoft.Winget.Source_8wekyb3d8bbwe/bun-windows-x64/bunx)",
+      "Bash(bunx --version)",
+      "Bash(/c/Users/maitr/.claude/skills/gstack/browse/dist/browse snapshot *)",
+      "Bash(/c/Users/maitr/.claude/skills/gstack/browse/dist/browse goto *)",
+      "Bash(curl -s http://localhost:3000/)",
+      "Bash(curl -s http://localhost:3000/api/health)",
+      "Bash(npm run *)",
+      "Bash(curl -s -o /dev/null -w \"%{http_code}\" http://localhost:5173/)",
+      "Bash(mkdir -p \"d:/Github Projects/FirstPledgePlatform/.gstack/qa-reports/screenshots\")",
+      "Bash(/c/Users/maitr/.claude/skills/gstack/browse/dist/browse screenshot *)",
+      "Bash(curl -s -o /dev/null -w '%{http_code}' __TRACKED_VAR__/api/debug/storage)",
+      "Bash(curl -s -o /dev/null -w '%{http_code}' __TRACKED_VAR__/api/products)",
+      "Bash(curl -s -o /dev/null -w '%{http_code}' -X DELETE __TRACKED_VAR__/api/products/1)",
+      "Bash(curl -s -o /dev/null -w '%{http_code}' -X DELETE __TRACKED_VAR__/api/products/1 -H 'Authorization: Bearer wrongkey')",
+      "Bash(netstat -ano)",
+      "Bash(npm test *)"
+    ]
+  }
+}

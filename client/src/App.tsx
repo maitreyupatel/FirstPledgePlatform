@@ -15,25 +15,65 @@ import { useEffect } from "react";
 function AmbientBackground() {
   return (
     <div className="fixed inset-0 -z-10 overflow-hidden pointer-events-none" aria-hidden>
-      {/* Orb 1 — mint/green, top-left */}
+      {/* Animated gradient overlay — creates a living, breathing background */}
       <div
-        className="absolute -top-64 -left-64 w-[900px] h-[700px] rounded-full opacity-100 animate-float-orb-1"
+        className="absolute inset-0 opacity-60"
         style={{
-          background: "radial-gradient(ellipse at center, var(--orb-1) 0%, transparent 70%)",
+          background:
+            "linear-gradient(135deg, hsl(158 82% 8%) 0%, hsl(224 42% 5%) 25%, hsl(252 45% 9%) 50%, hsl(200 72% 6%) 75%, hsl(158 72% 5%) 100%)",
+          backgroundSize: "400% 400%",
+          animation: "gradientShift 22s ease infinite",
         }}
       />
-      {/* Orb 2 — blue, bottom-right */}
+
+      {/* Orb 1 — vivid mint/emerald, top-left */}
       <div
-        className="absolute -bottom-80 -right-48 w-[700px] h-[800px] rounded-full animate-float-orb-2"
+        className="absolute -top-64 -left-48 w-[1000px] h-[800px] rounded-full animate-float-orb-1"
         style={{
-          background: "radial-gradient(ellipse at center, var(--orb-2) 0%, transparent 70%)",
+          background: "radial-gradient(ellipse at center, var(--orb-1) 0%, transparent 68%)",
         }}
       />
-      {/* Orb 3 — purple, center */}
+      {/* Orb 2 — electric blue, bottom-right */}
       <div
-        className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[1000px] h-[500px] rounded-full animate-float-orb-3"
+        className="absolute -bottom-72 -right-40 w-[900px] h-[900px] rounded-full animate-float-orb-2"
         style={{
-          background: "radial-gradient(ellipse at center, var(--orb-3) 0%, transparent 70%)",
+          background: "radial-gradient(ellipse at center, var(--orb-2) 0%, transparent 68%)",
+        }}
+      />
+      {/* Orb 3 — violet/indigo, center */}
+      <div
+        className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[1200px] h-[600px] rounded-full animate-float-orb-3"
+        style={{
+          background: "radial-gradient(ellipse at center, var(--orb-3) 0%, transparent 68%)",
+        }}
+      />
+      {/* Orb 4 — teal/cyan, top-right */}
+      <div
+        className="absolute -top-32 -right-32 w-[700px] h-[600px] rounded-full animate-float-orb-1"
+        style={{
+          background: "radial-gradient(ellipse at center, var(--orb-4) 0%, transparent 68%)",
+          animationDuration: "18s",
+          animationDelay: "-6s",
+        }}
+      />
+      {/* Orb 5 — pink/rose, bottom-left */}
+      <div
+        className="absolute -bottom-48 -left-32 w-[650px] h-[700px] rounded-full animate-float-orb-2"
+        style={{
+          background: "radial-gradient(ellipse at center, var(--orb-5) 0%, transparent 68%)",
+          animationDuration: "25s",
+          animationDelay: "-12s",
+        }}
+      />
+
+      {/* Fine grain noise overlay for premium texture */}
+      <div
+        className="absolute inset-0 opacity-[0.025]"
+        style={{
+          backgroundImage:
+            "url(\"data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noise'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noise)'/%3E%3C/svg%3E\")",
+          backgroundRepeat: "repeat",
+          backgroundSize: "128px 128px",
         }}
       />
     </div>
@@ -62,7 +102,6 @@ function Router() {
 }
 
 function App() {
-  // Default to dark mode for the Liquid Glass experience
   useEffect(() => {
     const stored = localStorage.getItem("theme");
     if (!stored) {

@@ -17,7 +17,7 @@ const CONFIG = {
     glassClass: "glass-safe",
     textColor: "text-safety-safeDark dark:text-safety-safeDark",
     dotColor: "bg-safety-safe dark:bg-safety-safeDark",
-    glow: "shadow-[0_0_16px_rgba(21,128,61,0.25)]",
+    glow: "shadow-[0_0_24px_rgba(34,197,94,0.35),0_0_8px_rgba(21,128,61,0.20)]",
   },
   caution: {
     icon: AlertTriangle,
@@ -25,7 +25,7 @@ const CONFIG = {
     glassClass: "glass-caution",
     textColor: "text-safety-caution dark:text-safety-cautionDark",
     dotColor: "bg-safety-caution dark:bg-safety-cautionDark",
-    glow: "shadow-[0_0_16px_rgba(180,83,9,0.25)]",
+    glow: "shadow-[0_0_24px_rgba(245,158,11,0.35),0_0_8px_rgba(180,83,9,0.20)]",
   },
   banned: {
     icon: OctagonX,
@@ -33,7 +33,7 @@ const CONFIG = {
     glassClass: "glass-banned",
     textColor: "text-safety-banned dark:text-safety-bannedDark",
     dotColor: "bg-safety-banned dark:bg-safety-bannedDark",
-    glow: "shadow-[0_0_16px_rgba(185,28,28,0.25)]",
+    glow: "shadow-[0_0_24px_rgba(239,68,68,0.35),0_0_8px_rgba(185,28,28,0.20)]",
   },
 };
 

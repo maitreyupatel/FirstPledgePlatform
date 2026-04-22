@@ -64,7 +64,7 @@ export default function ProductCard({
     <div
       className={cn(
         "group relative rounded-2xl overflow-hidden transition-all duration-500 ease-spring",
-        "glass card-lift",
+        "glass glass-shimmer card-lift",
         "flex flex-col"
       )}
     >
@@ -73,11 +73,20 @@ export default function ProductCard({
         <img
           src={imageUrl}
           alt={name}
-          className="w-full h-full object-cover transition-transform duration-700 group-hover:scale-105"
+          className="w-full h-full object-cover transition-transform duration-700 group-hover:scale-[1.08]"
           data-testid={`img-product-${id}`}
         />
-        {/* Gradient overlay */}
-        <div className="absolute inset-0 bg-gradient-to-t from-black/60 via-transparent to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-400" />
+        {/* Gradient overlay — reveals on hover */}
+        <div className="absolute inset-0 bg-gradient-to-t from-black/70 via-transparent to-transparent opacity-40 group-hover:opacity-100 transition-opacity duration-500" />
+        {/* Subtle color cast matching safety status */}
+        <div
+          className={cn(
+            "absolute inset-0 opacity-0 group-hover:opacity-15 transition-opacity duration-500",
+            safetyStatus === "safe" && "bg-green-500",
+            safetyStatus === "caution" && "bg-amber-500",
+            safetyStatus === "banned" && "bg-red-500"
+          )}
+        />
 
         {/* Badges */}
         <div className="absolute top-3 right-3 flex flex-col gap-2 items-end">
@@ -97,8 +106,12 @@ export default function ProductCard({
       {/* Card body */}
       <div className="flex flex-col flex-1 p-5 space-y-3">
         <div>
-          <p className="text-xs font-semibold uppercase tracking-widest text-primary/80 mb-1">{brand}</p>
-          <h3 className="font-display font-700 text-base leading-tight line-clamp-2 text-foreground">{name}</h3>
+          <p className="text-xs font-semibold uppercase tracking-widest text-primary/80 mb-1">
+            {brand}
+          </p>
+          <h3 className="font-display font-700 text-base leading-tight line-clamp-2 text-foreground group-hover:text-primary transition-colors duration-300">
+            {name}
+          </h3>
         </div>
 
         {isAdmin ? (
@@ -158,7 +171,7 @@ export default function ProductCard({
             </AlertDialog>
           </div>
         ) : (
-          <div className="flex items-center gap-1.5 text-primary text-sm font-semibold mt-auto pt-1 group-hover:gap-2.5 transition-all duration-300">
+          <div className="flex items-center gap-1.5 text-primary text-sm font-semibold mt-auto pt-1 group-hover:gap-3 transition-all duration-400">
             <span>View Safety Report</span>
             <ArrowUpRight className="h-3.5 w-3.5 transition-transform duration-300 group-hover:-translate-y-0.5 group-hover:translate-x-0.5" />
           </div>
