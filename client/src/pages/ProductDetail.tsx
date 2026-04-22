@@ -1,19 +1,16 @@
 import { useQuery } from "@tanstack/react-query";
 import { Link } from "wouter";
-
 import Header from "@/components/Header";
 import IngredientAccordion from "@/components/IngredientAccordion";
 import SafetyBadge from "@/components/SafetyBadge";
 import SafetyMeter from "@/components/SafetyMeter";
 import { Button } from "@/components/ui/button";
-import { Card } from "@/components/ui/card";
 import { Separator } from "@/components/ui/separator";
+import { ArrowLeft, ExternalLink } from "lucide-react";
 import { SafetyStatus } from "@shared/types";
 
 interface ProductDetailParams {
-  params: {
-    id: string;
-  };
+  params: { id: string };
 }
 
 interface Ingredient {
@@ -36,140 +33,149 @@ interface Product {
 }
 
 export default function ProductDetail({ params }: ProductDetailParams) {
-  const productId = params.id;
-  const {
-    data: product,
-    isLoading,
-    isError,
-  } = useQuery<Product | null>({
-    queryKey: [`/api/products/${productId}`],
+  const { data: product, isLoading, isError } = useQuery<Product | null>({
+    queryKey: [`/api/products/${params.id}`],
   });
 
-  const ingredients = product?.ingredients || [];
-  const safeCount = ingredients.filter((ingredient) => ingredient.status === "safe").length;
-  const cautionCount = ingredients.filter((ingredient) => ingredient.status === "caution").length;
-  const bannedCount = ingredients.filter((ingredient) => ingredient.status === "banned").length;
+  const ingredients = product?.ingredients ?? [];
+  const safeCount = ingredients.filter((i) => i.status === "safe").length;
+  const cautionCount = ingredients.filter((i) => i.status === "caution").length;
+  const bannedCount = ingredients.filter((i) => i.status === "banned").length;
 
   return (
-    <div className="min-h-screen bg-muted/10">
+    <div className="min-h-screen">
       <Header showAdminLink />
 
-      <main className="container max-w-7xl mx-auto px-4 md:px-6 py-10">
-        <div className="mb-10 flex items-center justify-between gap-4">
-          <Button variant="ghost" asChild>
+      <main className="container max-w-7xl mx-auto px-4 md:px-6 py-8">
+        {/* Top bar */}
+        <div className="mb-8 flex items-center justify-between gap-4">
+          <Button
+            variant="ghost"
+            asChild
+            className="h-9 pl-2 rounded-xl glass-subtle hover:glass text-sm font-medium"
+          >
             <Link href="/">
-              <span>← Back to Products</span>
+              <ArrowLeft className="mr-1.5 h-4 w-4" />
+              Back
             </Link>
           </Button>
-          <span className="text-xs uppercase tracking-wide text-muted-foreground">
-            Product Safety Report
-          </span>
+          <div className="glass-subtle px-3 py-1.5 rounded-full">
+            <span className="text-[10px] font-bold uppercase tracking-[0.15em] text-muted-foreground">
+              Safety Report
+            </span>
+          </div>
         </div>
 
+        {/* Loading */}
         {isLoading && (
-          <div className="flex h-64 items-center justify-center rounded-lg border bg-card text-card-foreground shadow-sm">
-            Loading product report...
+          <div className="glass rounded-3xl py-24 flex items-center justify-center">
+            <div className="space-y-3 text-center">
+              <div className="w-8 h-8 rounded-full border-2 border-primary border-t-transparent animate-spin mx-auto" />
+              <p className="text-sm text-muted-foreground">Loading safety report...</p>
+            </div>
           </div>
         )}
 
-        {isError && (
-          <div className="flex h-64 items-center justify-center rounded-lg border bg-card text-card-foreground shadow-sm">
-            Unable to load product report. Please try again later.
-          </div>
-        )}
-
-        {!isLoading && !isError && !product && (
-          <div className="flex h-64 items-center justify-center rounded-lg border bg-card text-card-foreground shadow-sm">
-            Product not found.
+        {(isError || (!isLoading && !product)) && (
+          <div className="glass rounded-3xl py-24 flex items-center justify-center">
+            <p className="text-muted-foreground text-sm">
+              {isError ? "Unable to load report. Please try again." : "Product not found."}
+            </p>
           </div>
         )}
 
         {product && (
-          <div className="space-y-10">
-            <section className="grid grid-cols-1 gap-8 lg:grid-cols-12">
-              <Card className="relative overflow-hidden border-none bg-gradient-to-br from-primary/10 via-background to-background shadow-lg lg:col-span-7">
-                <div className="absolute inset-0 bg-[radial-gradient(circle_at_top,_rgba(22,163,74,0.08),_transparent_60%)]" />
-                <div className="relative z-10 flex h-full flex-col justify-between p-8 md:p-10">
-                  <div className="space-y-6">
-                    <div className="inline-flex items-center gap-2 rounded-full border border-primary/20 bg-primary/10 px-4 py-1 text-sm font-medium text-primary uppercase tracking-wide">
-                      {product.status === "published" ? "Published" : "Draft"}
-                    </div>
-                    <div className="space-y-4">
-                      <h1 className="text-4xl font-semibold tracking-tight text-foreground md:text-5xl">
-                        {product.name}
-                      </h1>
-                      <p className="text-lg text-foreground/80">
-                        {product.brand}
-                      </p>
-                    </div>
+          <div className="space-y-8 animate-fade-up">
+            {/* Hero section */}
+            <section className="grid grid-cols-1 lg:grid-cols-12 gap-6">
+              {/* Left: Product info */}
+              <div className="lg:col-span-7 glass rounded-3xl overflow-hidden relative">
+                {/* Subtle gradient bg */}
+                <div
+                  className="absolute inset-0 opacity-40"
+                  style={{
+                    background: "radial-gradient(ellipse 80% 60% at 20% 20%, hsl(var(--primary) / 0.12), transparent 70%)",
+                  }}
+                />
+                <div className="relative z-10 p-8 md:p-10 flex flex-col h-full gap-8">
+                  {/* Status pill */}
+                  <div className="flex items-center gap-3">
+                    <span className="glass-subtle px-3 py-1 rounded-full text-[10px] font-bold uppercase tracking-widest text-primary">
+                      {product.status}
+                    </span>
                   </div>
 
-                  <div className="mt-10 flex items-center gap-4 rounded-2xl bg-card/80 dark:bg-card/90 p-6 shadow-sm backdrop-blur">
-                    <SafetyBadge status={product.overallStatus} showLabel />
-                    <div className="space-y-1">
-                      <p className="text-sm uppercase tracking-wide text-muted-foreground">
+                  {/* Product info */}
+                  <div className="flex-1 space-y-3">
+                    <p className="text-xs font-bold uppercase tracking-widest text-primary/80">{product.brand}</p>
+                    <h1 className="font-display font-extrabold text-3xl md:text-4xl tracking-tight leading-tight">
+                      {product.name}
+                    </h1>
+                  </div>
+
+                  {/* Verdict card */}
+                  <div className="glass-strong rounded-2xl p-5 flex items-start gap-4">
+                    <SafetyBadge status={product.overallStatus} showLabel={false} size="md" />
+                    <div className="flex-1 space-y-1">
+                      <p className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground">
                         Overall Safety Verdict
                       </p>
-                      <p className="text-base text-foreground">
-                        {product.summary}
-                      </p>
+                      <div className="flex items-center gap-2">
+                        <SafetyBadge status={product.overallStatus} showLabel size="sm" />
+                      </div>
+                      {product.summary && (
+                        <p className="text-sm text-muted-foreground mt-2 leading-relaxed">
+                          {product.summary}
+                        </p>
+                      )}
                     </div>
                   </div>
                 </div>
-              </Card>
+              </div>
 
-              <div className="lg:col-span-5">
-                <div className="relative overflow-hidden rounded-2xl border bg-card shadow-lg">
+              {/* Right: Image + meter */}
+              <div className="lg:col-span-5 glass rounded-3xl overflow-hidden flex flex-col">
+                <div className="relative aspect-[16/9] overflow-hidden">
                   <img
                     src={product.imageUrl}
-                    alt={`${product.name} product packaging`}
-                    className="h-64 w-full object-cover"
+                    alt={`${product.name} packaging`}
+                    className="w-full h-full object-cover"
                     data-testid="product-detail-image"
                   />
-                  <div className="p-6">
-                    <SafetyMeter
-                      safeCount={safeCount}
-                      cautionCount={cautionCount}
-                      bannedCount={bannedCount}
-                    />
-                    <Separator className="my-6" />
-                    {/* Only show draft-related text for draft products */}
-                    {product.status === "draft" && (
-                      <div className="space-y-3 text-sm text-muted-foreground">
-                        <p>
-                          This report summarizes the current risk assessment for
-                          each ingredient. Draft products are visible only to
-                          administrators until published.
-                        </p>
-                        <p>
-                          Override any ingredient from the admin workspace to
-                          document editorial decisions.
-                        </p>
-                      </div>
-                    )}
-                    {/* For published products, show consumer-friendly text */}
-                    {product.status === "published" && (
-                      <div className="space-y-3 text-sm text-muted-foreground">
-                        <p>
-                          This report summarizes the current risk assessment for
-                          each ingredient based on scientific research and safety data.
-                        </p>
-                      </div>
-                    )}
-                  </div>
+                  <div className="absolute inset-0 bg-gradient-to-t from-black/40 to-transparent" />
+                </div>
+                <div className="p-6 flex flex-col gap-5 flex-1">
+                  <SafetyMeter
+                    safeCount={safeCount}
+                    cautionCount={cautionCount}
+                    bannedCount={bannedCount}
+                  />
+                  {product.status === "draft" && (
+                    <>
+                      <Separator className="bg-white/8" />
+                      <p className="text-xs text-muted-foreground leading-relaxed">
+                        Draft — visible to administrators only until published.
+                      </p>
+                    </>
+                  )}
                 </div>
               </div>
             </section>
 
-            <section className="grid gap-8">
-              <div className="space-y-3">
-                <h2 className="text-2xl font-semibold tracking-tight">
-                  Ingredient Safety Analysis
-                </h2>
-                <p className="max-w-2xl text-sm text-muted-foreground">
-                  Each ingredient includes AI-generated research along with the
-                  source citation used to support the current safety status.
-                </p>
+            {/* Ingredients section */}
+            <section className="space-y-6">
+              <div className="flex flex-col md:flex-row md:items-end md:justify-between gap-3">
+                <div className="space-y-2">
+                  <h2 className="font-display font-bold text-2xl tracking-tight">
+                    Ingredient Analysis
+                  </h2>
+                  <p className="text-sm text-muted-foreground max-w-xl leading-relaxed">
+                    Each ingredient includes AI-generated research with the source citation supporting its safety rating.
+                  </p>
+                </div>
+                <span className="text-xs text-muted-foreground glass-subtle px-3 py-1.5 rounded-full">
+                  {ingredients.length} ingredient{ingredients.length !== 1 ? "s" : ""}
+                </span>
               </div>
               <IngredientAccordion ingredients={ingredients} />
             </section>

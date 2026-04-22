@@ -10,55 +10,62 @@ interface SafetyBadgeProps {
   className?: string;
 }
 
-export default function SafetyBadge({ 
-  status, 
-  size = "md", 
+const CONFIG = {
+  safe: {
+    icon: Shield,
+    label: "Safe",
+    glassClass: "glass-safe",
+    textColor: "text-safety-safeDark dark:text-safety-safeDark",
+    dotColor: "bg-safety-safe dark:bg-safety-safeDark",
+    glow: "shadow-[0_0_16px_rgba(21,128,61,0.25)]",
+  },
+  caution: {
+    icon: AlertTriangle,
+    label: "Caution",
+    glassClass: "glass-caution",
+    textColor: "text-safety-caution dark:text-safety-cautionDark",
+    dotColor: "bg-safety-caution dark:bg-safety-cautionDark",
+    glow: "shadow-[0_0_16px_rgba(180,83,9,0.25)]",
+  },
+  banned: {
+    icon: OctagonX,
+    label: "Banned",
+    glassClass: "glass-banned",
+    textColor: "text-safety-banned dark:text-safety-bannedDark",
+    dotColor: "bg-safety-banned dark:bg-safety-bannedDark",
+    glow: "shadow-[0_0_16px_rgba(185,28,28,0.25)]",
+  },
+};
+
+const ICON_SIZE = {
+  sm: "h-3.5 w-3.5",
+  md: "h-5 w-5",
+  lg: "h-10 w-10",
+};
+
+export default function SafetyBadge({
+  status,
+  size = "md",
   showLabel = false,
-  className 
+  className,
 }: SafetyBadgeProps) {
-  const config = {
-    safe: {
-      icon: Shield,
-      label: "Safe",
-      color: "text-safety-safe",
-      bgColor: "bg-safety-safeLight",
-    },
-    caution: {
-      icon: AlertTriangle,
-      label: "Caution",
-      color: "text-safety-caution",
-      bgColor: "bg-safety-cautionLight",
-    },
-    banned: {
-      icon: OctagonX,
-      label: "Banned",
-      color: "text-safety-banned",
-      bgColor: "bg-safety-bannedLight",
-    },
-  };
-
-  const sizeClasses = {
-    sm: "h-4 w-4",
-    md: "h-6 w-6",
-    lg: "h-12 w-12",
-  };
-
-  const normalizedStatus = status?.toLowerCase() as SafetyStatus;
-  const fallbackStatus = config[normalizedStatus] ? normalizedStatus : "safe";
-  const { icon: Icon, label, color, bgColor } = config[fallbackStatus];
+  const normalized = status?.toLowerCase() as SafetyStatus;
+  const cfg = CONFIG[normalized] ?? CONFIG.safe;
+  const { icon: Icon, label, glassClass, textColor, dotColor, glow } = cfg;
 
   if (showLabel) {
     return (
       <div
         className={cn(
-          "inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md font-medium text-sm",
-          bgColor,
-          color,
+          "inline-flex items-center gap-2 px-3 py-1.5 rounded-xl font-semibold text-sm",
+          glassClass,
+          textColor,
+          glow,
           className
         )}
         data-testid={`badge-${status}`}
       >
-        <Icon className="h-4 w-4" />
+        <Icon className="h-4 w-4 flex-shrink-0" />
         <span>{label}</span>
       </div>
     );
@@ -67,13 +74,14 @@ export default function SafetyBadge({
   return (
     <div
       className={cn(
-        "inline-flex items-center justify-center rounded-full p-2",
-        bgColor,
+        "inline-flex items-center justify-center rounded-xl p-2",
+        glassClass,
+        glow,
         className
       )}
       data-testid={`icon-${status}`}
     >
-      <Icon className={cn(sizeClasses[size], color)} />
+      <Icon className={cn(ICON_SIZE[size], textColor)} />
     </div>
   );
 }

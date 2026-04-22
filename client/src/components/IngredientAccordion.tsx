@@ -27,7 +27,7 @@ export default function IngredientAccordion({ ingredients }: IngredientAccordion
         <AccordionItem
           key={index}
           value={`item-${index}`}
-          className="border rounded-lg px-6 bg-card data-[state=open]:bg-muted/30 transition-colors"
+          className="glass rounded-2xl px-6 border-none data-[state=open]:glass-strong transition-all duration-300"
           data-testid={`accordion-ingredient-${index}`}
         >
           <AccordionTrigger className="hover:no-underline py-5">
