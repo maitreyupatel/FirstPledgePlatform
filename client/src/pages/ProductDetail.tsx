@@ -46,7 +46,7 @@ export default function ProductDetail({ params }: ProductDetailParams) {
     <div className="min-h-screen">
       <Header showAdminLink />
 
-      <main className="container max-w-7xl mx-auto px-4 md:px-6 py-8">
+      <main className="container max-w-7xl mx-auto px-4 md:px-6 py-8 pt-20">
         {/* Top bar */}
         <div className="mb-8 flex items-center justify-between gap-4">
           <Button

@@ -518,7 +518,7 @@ export default function ProductForm() {
   return (
     <div className="min-h-screen bg-muted/10">
       <Header showAdminLink />
-      <main className="container max-w-7xl mx-auto px-4 md:px-6 py-10 space-y-10">
+      <main className="container max-w-7xl mx-auto px-4 md:px-6 py-10 pt-20 space-y-10">
         <div className="flex flex-col justify-between gap-6 lg:flex-row lg:items-center">
           <div>
             <p className="text-sm uppercase tracking-wide text-muted-foreground">

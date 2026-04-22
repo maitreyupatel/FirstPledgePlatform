@@ -23,9 +23,9 @@ export default function ThemeToggle() {
       onClick={toggleTheme}
       data-testid="button-theme-toggle"
       aria-label="Toggle theme"
-      className="relative h-8 w-8 flex items-center justify-center rounded-xl glass-subtle hover:bg-white/12 transition-all duration-300 group"
+      className="relative h-8 w-8 flex items-center justify-center rounded-full glass-subtle hover:bg-white/12 transition-all duration-300 group"
     >
-      <span className="absolute inset-0 rounded-xl ring-1 ring-white/10 group-hover:ring-white/20 transition-all duration-300" />
+      <span className="absolute inset-0 rounded-full ring-1 ring-white/10 group-hover:ring-white/20 transition-all duration-300" />
       {theme === "light" ? (
         <Moon className="h-4 w-4 text-muted-foreground group-hover:text-foreground transition-colors duration-200" />
       ) : (

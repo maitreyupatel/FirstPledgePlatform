@@ -46,8 +46,9 @@ export default function Home() {
       <Header showAdminLink />
       <Hero />
 
+
       {/* Stats strip */}
-      <div className="relative -mt-12 z-20 container max-w-5xl mx-auto px-4 md:px-6 mb-12">
+      <div className="relative z-20 container max-w-3xl mx-auto px-4 md:px-6 mb-12 -mt-2">
         <div className="glass rounded-3xl p-1">
           <div className="grid grid-cols-3 divide-x divide-white/10">
             {STATS.map(({ icon: Icon, value, label }) => (
@@ -125,7 +126,7 @@ export default function Home() {
       </section>
 
       {/* How It Works */}
-      <section className="py-16 md:py-24">
+      <section id="how-it-works" className="py-16 md:py-24">
         <div className="container max-w-7xl mx-auto px-4 md:px-6">
           <div className="text-center space-y-3 mb-16">
             <div className="inline-flex items-center gap-2 glass-subtle px-3 py-1 rounded-full">

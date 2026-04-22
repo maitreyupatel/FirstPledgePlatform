@@ -118,10 +118,10 @@
   --glass-shadow: rgba(0, 0, 0, 0.40);
   --glass-blur: blur(24px) saturate(1.8) brightness(1.08);
 
-  /* Orb colors (dark) */
-  --orb-1: rgba(16, 185, 129, 0.13);
-  --orb-2: rgba(59, 130, 246, 0.09);
-  --orb-3: rgba(139, 92, 246, 0.06);
+  /* Orb colors (dark) — richer so glass has vivid color to refract */
+  --orb-1: rgba(16, 185, 129, 0.18);
+  --orb-2: rgba(59, 130, 246, 0.13);
+  --orb-3: rgba(139, 92, 246, 0.09);
 
   /* Safety glass tints — darker */
   --glass-safe-bg: rgba(21, 128, 61, 0.14);
@@ -138,7 +138,7 @@
   --opaque-button-border-intensity: 9;
 
   /* Shadcn tokens — Dark Mode */
-  --background: 226 38% 5%;
+  --background: 224 42% 4%;
   --foreground: 210 22% 95%;
   --border: 226 22% 14%;
   --input: 226 20% 22%;
@@ -261,6 +261,28 @@
       0 8px 32px var(--glass-shadow),
       inset 0 1px 0 var(--glass-highlight),
       inset 0 -1px 0 rgba(0, 0, 0, 0.04);
+    position: relative;
+  }
+
+  /* Prismatic specular highlight on top edge */
+  .glass::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 15%;
+    right: 15%;
+    height: 1px;
+    background: linear-gradient(
+      90deg,
+      transparent 0%,
+      rgba(255, 255, 255, 0.7) 30%,
+      rgba(255, 255, 255, 0.9) 50%,
+      rgba(255, 255, 255, 0.7) 70%,
+      transparent 100%
+    );
+    border-radius: 9999px;
+    pointer-events: none;
+    z-index: 1;
   }
 
   .glass-subtle {
