@@ -1,5 +1,6 @@
 import cors from "cors";
 import express from "express";
+import rateLimit from "express-rate-limit";
 import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -17,7 +18,7 @@ import { SupabaseStorage } from "./storage/supabaseStorage";
 import { buildSourceUrl as buildEwgSourceUrl } from "./utils/ewgUrlBuilder";
 import { AIVettingService } from "./services/aiVettingService";
 import { CitationService } from "./services/citationService";
-import { requireAuth } from "./middleware/auth";
+import { requireAuth, optionalAuth } from "./middleware/auth";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -168,8 +169,14 @@ app.get("/api/health", (_req, res) => {
   res.json({ status: "ok", timestamp: new Date().toISOString() });
 });
 
-// Diagnostic endpoint to check storage status (works even if storage fails)
-app.get("/api/debug/storage", (_req, res) => {
+// Diagnostic endpoint — dev only, do not expose in production
+app.get("/api/debug/storage", (_req, res, next) => {
+  if (process.env.NODE_ENV !== 'development') {
+    res.status(404).json({ error: "Not found" });
+    return;
+  }
+  next();
+}, (_req2, res) => {
   // This endpoint should never throw - it's for diagnostics
   const hasUrl = !!process.env.SUPABASE_URL;
   const hasKey = !!process.env.SUPABASE_SERVICE_ROLE_KEY;
@@ -208,12 +215,16 @@ app.get("/api/debug/storage", (_req, res) => {
   });
 });
 
-// Public routes (no auth required)
-app.get("/api/products", async (req, res) => {
+// Public routes — optionalAuth so admins can pass includeUnpublished=true
+app.get("/api/products", optionalAuth, async (req, res) => {
   try {
     const storageInstance = getStorage();
-    const includeUnpublished = req.query.includeUnpublished === "true";
-    console.log("Fetching products, includeUnpublished:", includeUnpublished);
+    // includeUnpublished only honoured for authenticated requests (admin use)
+    const isAuthenticated = !!(req as any).user;
+    const includeUnpublished = isAuthenticated && req.query.includeUnpublished === "true";
+    if (process.env.NODE_ENV === 'development') {
+      console.log("Fetching products, includeUnpublished:", includeUnpublished);
+    }
     const products = await storageInstance.list({ includeUnpublished });
     console.log(`Found ${products.length} products`);
     res.json(products);
@@ -245,10 +256,12 @@ app.get("/api/products", async (req, res) => {
   }
 });
 
-app.get("/api/products/:id", async (req, res) => {
+app.get("/api/products/:id", optionalAuth, async (req, res) => {
   try {
     const storageInstance = getStorage();
-    const includeUnpublished = req.query.includeUnpublished === "true";
+    // includeUnpublished only honoured for authenticated requests (admin use)
+    const isAuthenticated = !!(req as any).user;
+    const includeUnpublished = isAuthenticated && req.query.includeUnpublished === "true";
     const product = await storageInstance.getById(req.params.id, { includeUnpublished });
 
     if (!product) {
@@ -449,7 +462,15 @@ app.get("/api/admin/ingredient-analyses", requireAuth, async (req, res) => {
   }
 });
 
-app.post("/api/vet-ingredients", async (req, res) => {
+const vetIngredientsLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 10,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: "Too many requests. Please wait a minute before trying again." },
+});
+
+app.post("/api/vet-ingredients", vetIngredientsLimiter, async (req, res) => {
   const payload = req.body as VetIngredientsRequest;
   if (!payload?.ingredientsText?.trim()) {
     res.status(400).json({ error: "ingredientsText is required" });

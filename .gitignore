@@ -137,3 +137,6 @@ dist
 # Vite logs files
 vite.config.js.timestamp-*
 vite.config.ts.timestamp-*
+
+# gstack local data (security reports, sessions, analytics — keep off remote)
+.gstack/

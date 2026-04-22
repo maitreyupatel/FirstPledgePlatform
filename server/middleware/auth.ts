@@ -68,10 +68,11 @@ export async function requireAuth(req: Request, res: Response, next: NextFunctio
     ? authHeader.substring(7) 
     : authHeader;
   
-  console.log(`🔐 Auth check for ${req.method} ${req.path}`);
-  console.log(`   Token present: ${!!token}`);
-  console.log(`   Token length: ${token?.length || 0}`);
-  console.log(`   Token preview: ${token ? token.substring(0, 20) + '...' : 'none'}`);
+  if (process.env.NODE_ENV === 'development') {
+    console.log(`🔐 Auth check for ${req.method} ${req.path}`);
+    console.log(`   Token present: ${!!token}`);
+    console.log(`   Token length: ${token?.length || 0}`);
+  }
 
   // Try Supabase JWT verification first
   if (supabaseClient) {
@@ -145,9 +146,10 @@ export async function requireAuth(req: Request, res: Response, next: NextFunctio
   }
 
   // Fallback to API key authentication
-  // ADMIN_API_KEY is optional - SUPABASE_SERVICE_ROLE_KEY can be used instead
-  const validApiKey = ADMIN_API_KEY || supabaseServiceRoleKey;
-  
+  // IMPORTANT: Only use ADMIN_API_KEY here — never the service role key.
+  // The service role key bypasses Supabase RLS and must not be used as a bearer token.
+  const validApiKey = ADMIN_API_KEY;
+
   if (validApiKey) {
     console.log("   Attempting API key authentication...");
     if (token === validApiKey) {
@@ -161,7 +163,7 @@ export async function requireAuth(req: Request, res: Response, next: NextFunctio
       console.error("   ❌ API key mismatch");
     }
   } else {
-    console.log("   ⚠️  No API key configured");
+    console.log("   ⚠️  No ADMIN_API_KEY configured");
   }
 
   // No valid authentication found
@@ -197,11 +199,23 @@ export async function optionalAuth(req: Request, res: Response, next: NextFuncti
     try {
       const { data: { user }, error } = await supabaseClient.auth.getUser(token);
       if (!error && user) {
-        (req as any).user = {
-          id: user.id,
-          email: user.email,
-          role: 'admin'
-        };
+        // Check role from user_profiles — same check as requireAuth
+        try {
+          const adminClient = getSupabaseAdminClient();
+          const { data: profile } = await adminClient
+            .from("user_profiles")
+            .select("role")
+            .eq("id", user.id)
+            .single();
+          const role = profile?.role || 'user';
+          (req as any).user = {
+            id: user.id,
+            email: user.email,
+            role
+          };
+        } catch {
+          (req as any).user = { id: user.id, email: user.email, role: 'user' };
+        }
         return next();
       }
     } catch (error) {
@@ -209,8 +223,8 @@ export async function optionalAuth(req: Request, res: Response, next: NextFuncti
     }
   }
 
-  // Fallback to API key
-  const validApiKey = ADMIN_API_KEY || supabaseServiceRoleKey;
+  // Fallback to ADMIN_API_KEY only (never service role key)
+  const validApiKey = ADMIN_API_KEY;
   if (validApiKey && token === validApiKey) {
     (req as any).user = {
       id: 'admin',
