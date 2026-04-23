@@ -195,11 +195,15 @@ export class OpenFoodFactsService {
   }
 
   private isUsable(p: OFFApiProduct): boolean {
-    return !!(
-      p.product_name?.trim() &&
-      p.ingredients_text?.trim() &&
-      p.ingredients_text.length > 10
-    );
+    const name = p.product_name?.trim();
+    const text = p.ingredients_text?.trim();
+    if (!name || !text || text.length < 15) return false;
+    // Reject if ingredient text is mostly digits/codes (corrupt OFF data)
+    const letterRatio = (text.match(/[a-zA-Z]/g) || []).length / text.length;
+    if (letterRatio < 0.4) return false;
+    // Must have at least one comma or semicolon (real ingredient lists do)
+    if (!/[,;]/.test(text)) return false;
+    return true;
   }
 
   private normalize(p: OFFApiProduct, source: "food" | "beauty"): OFFProduct {

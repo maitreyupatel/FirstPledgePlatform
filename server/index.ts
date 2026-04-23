@@ -560,7 +560,8 @@ app.post("/api/vet-ingredients", vetIngredientsLimiter, async (req, res) => {
 });
 
 // Cron routes — protected by CRON_SECRET, invoked by Vercel scheduler
-app.use("/api/cron", buildCronRouter(aiVettingService, getStorage()));
+// Pass getStorage as a lazy getter so cron routes only init storage on first request
+app.use("/api/cron", buildCronRouter(aiVettingService, getStorage));
 
 const assetsDirectory = path.resolve(
   __dirname,

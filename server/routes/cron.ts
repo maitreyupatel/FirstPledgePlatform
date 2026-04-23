@@ -30,7 +30,7 @@ function verifyCronSecret(req: Request, res: Response): boolean {
 
 export function buildCronRouter(
   aiVettingService: AIVettingService | null,
-  storage: SupabaseStorage
+  getStorage: () => SupabaseStorage
 ): Router {
   const router = Router();
   const offService = new OpenFoodFactsService();
@@ -72,7 +72,7 @@ export function buildCronRouter(
     for (const offProduct of products) {
       try {
         // Skip if already exists (dedup by name+brand)
-        const existing = await storage.findByNameAndBrand(offProduct.name, offProduct.brand);
+        const existing = await getStorage().findByNameAndBrand(offProduct.name, offProduct.brand);
         if (existing) {
           results.push({ name: offProduct.name, status: "skipped", published: false, reason: "already exists" });
           continue;
@@ -96,7 +96,7 @@ export function buildCronRouter(
         // Auto-publish: high confidence AND no banned ingredients
         const shouldPublish = overallConfidence >= 0.7 && !hasBanned;
 
-        const createdProduct = await storage.create({
+        const createdProduct = await getStorage().create({
           name: offProduct.name,
           brand: offProduct.brand,
           summary: `AI-vetted product from Open Food Facts. ${toAnalyze.length} ingredients analyzed. Source: ${offProduct.source}.`,

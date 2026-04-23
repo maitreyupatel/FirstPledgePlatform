@@ -31,6 +31,8 @@ export function parseIngredients(rawText: string): string[] {
         clean = clean.replace(/\s+\d+\.?\d*\s*%\s*$/, "");
         // Strip trailing punctuation
         clean = clean.replace(/[.:,;]+$/, "").trim();
+        // Collapse multiple spaces (from underscore-wrapping: "_oats_" → " oats ")
+        clean = clean.replace(/\s{2,}/g, " ").trim();
         return clean;
       })
       // Keep only plausible ingredient names
