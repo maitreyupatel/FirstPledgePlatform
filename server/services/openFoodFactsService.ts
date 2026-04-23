@@ -64,9 +64,26 @@ const BEAUTY_CATEGORIES = [
   "en:toners",
 ];
 
-// Popular product barcodes as guaranteed fallback when search APIs are down
-// Food: globally recognizable, high scan counts on OFF
-// Beauty: verified present on Open Beauty Facts
+// Popular Indian product barcodes — priority fallback for India-first selection
+// Sourced from Open Food Facts India entries with high scan counts
+const INDIA_FALLBACK_BARCODES: Array<{ barcode: string; source: "food" | "beauty" }> = [
+  { barcode: "8901719110672", source: "food" },  // Parle-G Biscuits
+  { barcode: "8901030800245", source: "food" },  // Maggi 2-Minute Noodles
+  { barcode: "8901396044072", source: "food" },  // Bournvita Health Drink
+  { barcode: "8901052003103", source: "food" },  // Haldiram's Bhujia
+  { barcode: "8901030500101", source: "food" },  // Glow & Lovely Cream
+  { barcode: "8901396025750", source: "food" },  // Horlicks
+  { barcode: "8901063053786", source: "food" },  // Britannia Good Day Butter Cookies
+  { barcode: "8906002570016", source: "food" },  // Paper Boat Aamras
+  { barcode: "8901138523435", source: "beauty" }, // Himalaya Neem Face Wash
+  { barcode: "8901030100047", source: "beauty" }, // Pond's Cold Cream
+  { barcode: "8901396025590", source: "beauty" }, // Lakme Sun Expert SPF
+  { barcode: "8906067260047", source: "beauty" }, // Mamaearth Vitamin C Face Wash
+  { barcode: "8906110380018", source: "beauty" }, // WOW Skin Science Apple Cider Vinegar Shampoo
+  { barcode: "8904098100019", source: "beauty" }, // Biotique Bio Cucumber Toner
+];
+
+// Global fallback barcodes when India-specific search fails
 const FALLBACK_BARCODES: Array<{ barcode: string; source: "food" | "beauty" }> = [
   { barcode: "0048500201282", source: "food" },  // Tropicana Orange Juice
   { barcode: "3017620422003", source: "food" },  // Nutella
@@ -82,8 +99,17 @@ const FALLBACK_BARCODES: Array<{ barcode: string; source: "food" | "beauty" }> =
 
 export class OpenFoodFactsService {
   /**
-   * Fetch top products from Open Food Facts or Open Beauty Facts.
-   * Alternates food/beauty daily. Falls back to known barcodes if search is down.
+   * Fetch products for daily cron ingestion.
+   *
+   * Priority order:
+   * 1. India-specific OFF search (countries_tags=en:india) — high scan count
+   * 2. India barcode fallback list (known popular Indian brands)
+   * 3. Global category search (alternates food/beauty by day)
+   * 4. Global barcode fallback list
+   *
+   * India gets priority because: (a) product is India-focused, (b) Indian
+   * consumers are primary audience, (c) Amazon.in / Flipkart bestsellers
+   * are a strong proxy for what people actually buy and care about.
    */
   async fetchDailyProducts(count: number = 2): Promise<OFFProduct[]> {
     const dayOfYear = Math.floor(
@@ -91,21 +117,65 @@ export class OpenFoodFactsService {
     );
 
     const useBeauty = dayOfYear % 2 === 0;
-    const categories = useBeauty ? BEAUTY_CATEGORIES : FOOD_CATEGORIES;
-    const category = categories[dayOfYear % categories.length];
     const source = useBeauty ? "beauty" : "food";
 
+    // ── Step 1: India-specific category search ──────────────────────
+    const indiaCategories = useBeauty ? BEAUTY_CATEGORIES : FOOD_CATEGORIES;
+    const indiaCategory = indiaCategories[dayOfYear % indiaCategories.length];
     try {
-      const results = await this.fetchByCategory(category, source, count);
-      if (results.length > 0) return results;
+      const indiaResults = await this.fetchByCategoryAndCountry(indiaCategory, source, "en:india", count);
+      if (indiaResults.length >= count) {
+        console.log(`[OFF] India search hit: ${indiaResults.length} products in ${indiaCategory}`);
+        return indiaResults;
+      }
+      // Partial results — fill with India barcodes
+      if (indiaResults.length > 0) {
+        const remaining = count - indiaResults.length;
+        const barcodeResults = await this.resolveBarcodeFallbacks(
+          INDIA_FALLBACK_BARCODES.filter((b) => b.source === source),
+          remaining
+        );
+        return [...indiaResults, ...barcodeResults];
+      }
     } catch (err) {
-      console.warn(`[OFF] Category search failed (${category}): ${err}. Using barcode fallback.`);
+      console.warn(`[OFF] India category search failed (${indiaCategory}): ${err}`);
     }
 
-    // Fallback: look up known popular products by barcode
-    const fallbacks = FALLBACK_BARCODES.filter((b) => b.source === source);
+    // ── Step 2: India barcode fallback ─────────────────────────────
+    const indiaBarcode = await this.resolveBarcodeFallbacks(
+      INDIA_FALLBACK_BARCODES.filter((b) => b.source === source),
+      count
+    );
+    if (indiaBarcode.length > 0) {
+      console.log(`[OFF] India barcode fallback: ${indiaBarcode.length} products`);
+      return indiaBarcode;
+    }
+
+    // ── Step 3: Global category search ────────────────────────────
+    const globalCategory = indiaCategories[(dayOfYear + 3) % indiaCategories.length];
+    try {
+      const globalResults = await this.fetchByCategory(globalCategory, source, count);
+      if (globalResults.length > 0) {
+        console.log(`[OFF] Global search hit: ${globalResults.length} products`);
+        return globalResults;
+      }
+    } catch (err) {
+      console.warn(`[OFF] Global category search failed (${globalCategory}): ${err}`);
+    }
+
+    // ── Step 4: Global barcode fallback ───────────────────────────
+    return this.resolveBarcodeFallbacks(
+      FALLBACK_BARCODES.filter((b) => b.source === source),
+      count
+    );
+  }
+
+  private async resolveBarcodeFallbacks(
+    list: Array<{ barcode: string; source: "food" | "beauty" }>,
+    count: number
+  ): Promise<OFFProduct[]> {
     const results: OFFProduct[] = [];
-    for (const entry of fallbacks) {
+    for (const entry of list) {
       if (results.length >= count) break;
       try {
         const p = await this.fetchByBarcode(entry.barcode, entry.source);
@@ -113,6 +183,34 @@ export class OpenFoodFactsService {
       } catch { continue; }
     }
     return results;
+  }
+
+  async fetchByCategoryAndCountry(
+    category: string,
+    source: "food" | "beauty",
+    countryTag: string,
+    count: number = 5,
+    page: number = 1
+  ): Promise<OFFProduct[]> {
+    const base = source === "beauty" ? BEAUTY_API_BASE : FOOD_API_BASE;
+    const params = new URLSearchParams({
+      categories_tags: category,
+      countries_tags: countryTag,
+      fields: "_id,product_name,brands,image_front_url,ingredients_text,categories,unique_scans_n,completeness",
+      page_size: String(count * 4),
+      page: String(page),
+      sort_by: "unique_scans_n",
+    });
+    const url = `${base}/api/v2/search?${params}`;
+    const res = await fetch(url, {
+      headers: { "User-Agent": "FirstPledgePlatform/1.0 (maitreypatel@getpowerplay.in)" },
+    });
+    if (!res.ok) throw new Error(`OFF India API ${res.status}: ${category}`);
+    const data = await res.json();
+    return (data.products ?? [])
+      .filter((p: OFFApiProduct) => this.isUsable(p))
+      .slice(0, count)
+      .map((p: OFFApiProduct) => this.normalize(p, source));
   }
 
   async fetchByCategory(

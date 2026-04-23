@@ -1,7 +1,7 @@
 import { Link, useLocation } from "wouter";
 import { LogOut, Menu, X } from "lucide-react";
 import { useAuth } from "./auth/AuthProvider";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 
 interface HeaderProps {
   showAdminLink?: boolean;
@@ -49,9 +49,8 @@ export default function Header({ showAdminLink = false }: HeaderProps) {
   const [location] = useLocation();
   const { user, signOut } = useAuth();
   const isAdminPage = location.startsWith("/admin");
-  const [scrolled, setScrolled]   = useState(false);
-  const [menuOpen, setMenuOpen]   = useState(false);
-  const observerRef = useRef<IntersectionObserver | null>(null);
+  const [scrolled, setScrolled] = useState(false);
+  const [menuOpen, setMenuOpen] = useState(false);
 
   const handleLogout = async () => {
     await signOut();
@@ -59,14 +58,10 @@ export default function Header({ showAdminLink = false }: HeaderProps) {
   };
 
   useEffect(() => {
-    const sentinel = document.getElementById("hero-scroll-sentinel");
-    if (!sentinel) return;
-    observerRef.current = new IntersectionObserver(
-      ([entry]) => setScrolled(!entry.isIntersecting),
-      { threshold: 0 }
-    );
-    observerRef.current.observe(sentinel);
-    return () => observerRef.current?.disconnect();
+    const onScroll = () => setScrolled(window.scrollY > 24);
+    window.addEventListener("scroll", onScroll, { passive: true });
+    onScroll(); // set initial state
+    return () => window.removeEventListener("scroll", onScroll);
   }, []);
 
   const scrollTo = (id: string) => {
