@@ -1,24 +1,6 @@
-// Vercel serverless function entry — diagnostic wrapper to surface startup crash
-import type { IncomingMessage, ServerResponse } from "node:http";
-
-let app: any = null;
-let startupError: string | null = null;
-
-try {
-  const mod = await import("../server/index.js");
-  app = mod.default;
-} catch (err: any) {
-  startupError = `${err?.message || String(err)}\n\nStack: ${err?.stack || "none"}`;
-  console.error("STARTUP CRASH:", startupError);
-}
-
-export default function handler(req: IncomingMessage, res: ServerResponse) {
-  if (startupError) {
-    const body = JSON.stringify({ error: "startup_failed", detail: startupError });
-    res.statusCode = 500;
-    res.setHeader("Content-Type", "application/json");
-    res.end(body);
-    return;
-  }
-  return app(req, res);
-}
+// Vercel serverless function entry point
+// Imports from the esbuild-bundled output (dist/index.js), NOT the raw TypeScript source.
+// The build step (npm run build) compiles server/index.ts + all deps into dist/index.js.
+// Vercel runs "npm run build" before deploying, so dist/index.js always exists.
+import app from "../dist/index.js";
+export default app;
