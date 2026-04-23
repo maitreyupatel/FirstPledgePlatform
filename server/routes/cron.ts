@@ -10,6 +10,7 @@ import { OpenFoodFactsService } from "../services/openFoodFactsService";
 import { AIVettingService } from "../services/aiVettingService";
 import { SupabaseStorage } from "../storage/supabaseStorage";
 import { createClient } from "@supabase/supabase-js";
+import { parseIngredients } from "../utils/ingredientParser";
 
 function verifyCronSecret(req: Request, res: Response): boolean {
   const secret = process.env.CRON_SECRET;
@@ -26,13 +27,6 @@ function verifyCronSecret(req: Request, res: Response): boolean {
   return true;
 }
 
-function parseIngredients(rawText: string): string[] {
-  return rawText
-    .replace(/_/g, " ")
-    .split(/[,;]+/)
-    .map((s) => s.replace(/\s*\(.*?\)\s*/g, " ").trim())
-    .filter((s) => s.length > 2 && s.length < 80);
-}
 
 export function buildCronRouter(
   aiVettingService: AIVettingService | null,

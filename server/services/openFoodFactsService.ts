@@ -64,23 +64,55 @@ const BEAUTY_CATEGORIES = [
   "en:toners",
 ];
 
+// Popular product barcodes as guaranteed fallback when search APIs are down
+// Food: globally recognizable, high scan counts on OFF
+// Beauty: verified present on Open Beauty Facts
+const FALLBACK_BARCODES: Array<{ barcode: string; source: "food" | "beauty" }> = [
+  { barcode: "0048500201282", source: "food" },  // Tropicana Orange Juice
+  { barcode: "3017620422003", source: "food" },  // Nutella
+  { barcode: "0030000301913", source: "food" },  // Quaker Old Fashioned Oats
+  { barcode: "0041196990005", source: "food" },  // Heinz Tomato Ketchup
+  { barcode: "0028400028738", source: "food" },  // Lay's Classic
+  { barcode: "4005808194001", source: "beauty" }, // Nivea Creme
+  { barcode: "3574661385624", source: "beauty" }, // Cetaphil Daily Moisturizer
+  { barcode: "0079400023780", source: "beauty" }, // Dove Beauty Bar
+  { barcode: "3600521826492", source: "beauty" }, // L'Oreal Elvive
+  { barcode: "5000157024229", source: "beauty" }, // Simple Kind To Skin
+];
+
 export class OpenFoodFactsService {
   /**
    * Fetch top products from Open Food Facts or Open Beauty Facts.
-   * Picks category based on day-of-year to rotate through all categories over time.
+   * Alternates food/beauty daily. Falls back to known barcodes if search is down.
    */
   async fetchDailyProducts(count: number = 2): Promise<OFFProduct[]> {
     const dayOfYear = Math.floor(
       (Date.now() - new Date(new Date().getFullYear(), 0, 0).getTime()) / 86400000
     );
 
-    // Alternate between food and beauty each day
     const useBeauty = dayOfYear % 2 === 0;
     const categories = useBeauty ? BEAUTY_CATEGORIES : FOOD_CATEGORIES;
     const category = categories[dayOfYear % categories.length];
     const source = useBeauty ? "beauty" : "food";
 
-    return this.fetchByCategory(category, source, count);
+    try {
+      const results = await this.fetchByCategory(category, source, count);
+      if (results.length > 0) return results;
+    } catch (err) {
+      console.warn(`[OFF] Category search failed (${category}): ${err}. Using barcode fallback.`);
+    }
+
+    // Fallback: look up known popular products by barcode
+    const fallbacks = FALLBACK_BARCODES.filter((b) => b.source === source);
+    const results: OFFProduct[] = [];
+    for (const entry of fallbacks) {
+      if (results.length >= count) break;
+      try {
+        const p = await this.fetchByBarcode(entry.barcode, entry.source);
+        if (p) results.push(p);
+      } catch { continue; }
+    }
+    return results;
   }
 
   async fetchByCategory(
@@ -90,18 +122,53 @@ export class OpenFoodFactsService {
     page: number = 1
   ): Promise<OFFProduct[]> {
     const base = source === "beauty" ? BEAUTY_API_BASE : FOOD_API_BASE;
-    const url = `${base}/category/${encodeURIComponent(category)}/${page}.json?fields=_id,product_name,brands,image_front_url,ingredients_text,categories,unique_scans_n,completeness&page_size=${count * 3}`;
+
+    // Use v2 search API — more reliable than category browse endpoint
+    const params = new URLSearchParams({
+      categories_tags: category,
+      fields: "_id,product_name,brands,image_front_url,ingredients_text,categories,unique_scans_n,completeness",
+      page_size: String(count * 4),
+      page: String(page),
+      sort_by: "unique_scans_n",
+    });
+    const url = `${base}/api/v2/search?${params}`;
 
     const res = await fetch(url, {
       headers: { "User-Agent": "FirstPledgePlatform/1.0 (maitreypatel@getpowerplay.in)" },
     });
 
     if (!res.ok) {
-      throw new Error(`OFF API error ${res.status}: ${category}`);
+      // Fallback to v1 search on failure
+      return this.fetchByCategoryV1(category, source, count, page);
+    }
+
+    const data = await res.json();
+    const products: OFFApiProduct[] = data.products ?? [];
+
+    return products
+      .filter((p) => this.isUsable(p))
+      .slice(0, count)
+      .map((p) => this.normalize(p, source));
+  }
+
+  private async fetchByCategoryV1(
+    category: string,
+    source: "food" | "beauty",
+    count: number,
+    page: number
+  ): Promise<OFFProduct[]> {
+    const base = source === "beauty" ? BEAUTY_API_BASE : FOOD_API_BASE;
+    const url = `${base}/cgi/search.pl?action=process&tagtype_0=categories&tag_contains_0=contains&tag_0=${encodeURIComponent(category)}&json=1&page_size=${count * 4}&page=${page}&sort_by=unique_scans_n&fields=_id,product_name,brands,image_front_url,ingredients_text,categories`;
+
+    const res = await fetch(url, {
+      headers: { "User-Agent": "FirstPledgePlatform/1.0 (maitreypatel@getpowerplay.in)" },
+    });
+
+    if (!res.ok) {
+      throw new Error(`OFF API unavailable (${res.status}) for category: ${category}`);
     }
 
     const data: OFFApiResponse = await res.json();
-
     return (data.products || [])
       .filter((p) => this.isUsable(p))
       .slice(0, count)
