@@ -52,10 +52,16 @@ async function run() {
       : ["en:beverages", "en:snacks", "en:breakfast-cereals"];
     const category = categories[Math.floor(Math.random() * categories.length)];
     console.log(`   Trying category search: ${category}`);
-    const products = await offService.fetchByCategory(category, source, 5);
+    const products = await offService.fetchByCategory(category, source, 8);
+    // Take first with valid ingredient list
     if (products.length > 0) product = products[0];
   } catch {
     console.log("   Category search unavailable — falling back to barcode lookup");
+  }
+
+  // If category search gave junk, force barcode lookup
+  if (product) {
+    console.log(`   Category search returned: "${product.name}" — using it`);
   }
 
   // Fallback: known barcodes

@@ -12,68 +12,48 @@ import ProductForm from "@/pages/ProductForm";
 import NotFound from "@/pages/not-found";
 import { useEffect } from "react";
 
-function AmbientBackground() {
+function DeepSpaceBackground() {
   return (
-    <div className="fixed inset-0 -z-10 overflow-hidden pointer-events-none" aria-hidden>
-      {/* Animated gradient overlay — creates a living, breathing background */}
+    <div className="fixed inset-0 -z-10 pointer-events-none" aria-hidden>
+      {/* Base gradient — deep space atmosphere */}
       <div
-        className="absolute inset-0 opacity-60"
         style={{
-          background:
-            "linear-gradient(135deg, hsl(158 82% 8%) 0%, hsl(224 42% 5%) 25%, hsl(252 45% 9%) 50%, hsl(200 72% 6%) 75%, hsl(158 72% 5%) 100%)",
-          backgroundSize: "400% 400%",
-          animation: "gradientShift 22s ease infinite",
+          position: "absolute",
+          inset: 0,
+          background: "linear-gradient(175deg, #080c10 0%, #09111a 40%, #0c1622 70%, #0d1828 100%)",
         }}
       />
-
-      {/* Orb 1 — vivid mint/emerald, top-left */}
+      {/* Primary teal ambient light — the bioluminescent source */}
       <div
-        className="absolute -top-64 -left-48 w-[1000px] h-[800px] rounded-full animate-float-orb-1"
         style={{
-          background: "radial-gradient(ellipse at center, var(--orb-1) 0%, transparent 68%)",
+          position: "absolute",
+          inset: 0,
+          background: `
+            radial-gradient(ellipse 70% 50% at 50% 95%, rgba(0, 229, 200, 0.10) 0%, transparent 65%),
+            radial-gradient(ellipse 45% 35% at 15% 10%, rgba(0, 191, 165, 0.055) 0%, transparent 55%),
+            radial-gradient(ellipse 35% 28% at 88% 85%, rgba(127, 255, 212, 0.042) 0%, transparent 50%)
+          `,
+          animation: "hero-breathe 10s ease-in-out infinite",
         }}
       />
-      {/* Orb 2 — electric blue, bottom-right */}
+      {/* Vignette — edges fall into pure darkness, focuses attention center */}
       <div
-        className="absolute -bottom-72 -right-40 w-[900px] h-[900px] rounded-full animate-float-orb-2"
         style={{
-          background: "radial-gradient(ellipse at center, var(--orb-2) 0%, transparent 68%)",
+          position: "absolute",
+          inset: 0,
+          background: "radial-gradient(ellipse 85% 80% at 50% 40%, transparent 50%, rgba(4,7,11,0.55) 100%)",
         }}
       />
-      {/* Orb 3 — violet/indigo, center */}
+      {/* Fine grain noise — tactile texture that makes dark backgrounds feel premium */}
       <div
-        className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[1200px] h-[600px] rounded-full animate-float-orb-3"
         style={{
-          background: "radial-gradient(ellipse at center, var(--orb-3) 0%, transparent 68%)",
-        }}
-      />
-      {/* Orb 4 — teal/cyan, top-right */}
-      <div
-        className="absolute -top-32 -right-32 w-[700px] h-[600px] rounded-full animate-float-orb-1"
-        style={{
-          background: "radial-gradient(ellipse at center, var(--orb-4) 0%, transparent 68%)",
-          animationDuration: "18s",
-          animationDelay: "-6s",
-        }}
-      />
-      {/* Orb 5 — pink/rose, bottom-left */}
-      <div
-        className="absolute -bottom-48 -left-32 w-[650px] h-[700px] rounded-full animate-float-orb-2"
-        style={{
-          background: "radial-gradient(ellipse at center, var(--orb-5) 0%, transparent 68%)",
-          animationDuration: "25s",
-          animationDelay: "-12s",
-        }}
-      />
-
-      {/* Fine grain noise overlay for premium texture */}
-      <div
-        className="absolute inset-0 opacity-[0.025]"
-        style={{
+          position: "absolute",
+          inset: 0,
+          opacity: 0.028,
           backgroundImage:
-            "url(\"data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noise'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noise)'/%3E%3C/svg%3E\")",
+            "url(\"data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noise'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.88' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noise)'/%3E%3C/svg%3E\")",
           backgroundRepeat: "repeat",
-          backgroundSize: "128px 128px",
+          backgroundSize: "256px 256px",
         }}
       />
     </div>
@@ -103,19 +83,58 @@ function Router() {
 
 function App() {
   useEffect(() => {
-    const stored = localStorage.getItem("theme");
-    if (!stored) {
-      localStorage.setItem("theme", "dark");
-      document.documentElement.classList.add("dark");
-    } else {
-      document.documentElement.classList.toggle("dark", stored === "dark");
+    // Always dark — no light mode
+    document.documentElement.classList.add("dark");
+    localStorage.setItem("theme", "dark");
+  }, []);
+
+  useEffect(() => {
+    // Cursor glow — desktop only
+    if (!window.matchMedia("(hover: hover) and (pointer: fine)").matches) return;
+    const glow = document.getElementById("cursor-glow");
+    if (!glow) return;
+    const onMove = (e: MouseEvent) => {
+      glow.style.left = e.clientX + "px";
+      glow.style.top = e.clientY + "px";
+    };
+    document.addEventListener("mousemove", onMove, { passive: true });
+    return () => document.removeEventListener("mousemove", onMove);
+  }, []);
+
+  useEffect(() => {
+    // Magnetic glass light — tracks cursor within each glass element
+    if (!window.matchMedia("(hover: hover) and (pointer: fine)").matches) return;
+
+    function initGlassLight() {
+      const els = document.querySelectorAll<HTMLElement>(
+        ".glass-card, .glass-pill--interactive, .btn-ghost"
+      );
+      els.forEach((el) => {
+        const onMove = (e: MouseEvent) => {
+          const rect = el.getBoundingClientRect();
+          const x = ((e.clientX - rect.left) / rect.width) * 100;
+          const y = ((e.clientY - rect.top) / rect.height) * 100;
+          el.style.setProperty("--light-x", `${x.toFixed(1)}%`);
+          el.style.setProperty("--light-y", `${y.toFixed(1)}%`);
+          el.style.setProperty("--light-opacity", "1");
+        };
+        const onLeave = () => el.style.setProperty("--light-opacity", "0");
+        el.addEventListener("mousemove", onMove as EventListener, { passive: true });
+        el.addEventListener("mouseleave", onLeave);
+      });
     }
+
+    // Re-run on DOM mutations so dynamically rendered cards get light too
+    const observer = new MutationObserver(initGlassLight);
+    observer.observe(document.body, { childList: true, subtree: true });
+    initGlassLight();
+    return () => observer.disconnect();
   }, []);
 
   return (
     <QueryClientProvider client={queryClient}>
       <TooltipProvider>
-        <AmbientBackground />
+        <DeepSpaceBackground />
         <Toaster />
         <Router />
       </TooltipProvider>

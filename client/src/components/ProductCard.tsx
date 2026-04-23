@@ -1,8 +1,7 @@
 import { Link, useLocation } from "wouter";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { Edit2, Trash2, ArrowUpRight } from "lucide-react";
-import SafetyBadge from "./SafetyBadge";
+import { Edit2, Trash2, ArrowUpRight, CheckCircle } from "lucide-react";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -17,8 +16,7 @@ import {
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
-import { useState } from "react";
-import { cn } from "@/lib/utils";
+import { useState, useEffect, useRef } from "react";
 
 type SafetyStatus = "safe" | "caution" | "banned";
 
@@ -30,6 +28,56 @@ interface ProductCardProps {
   safetyStatus: SafetyStatus;
   isAdmin?: boolean;
   productStatus?: "draft" | "published";
+}
+
+// Map safety status to numeric score
+const SCORE_MAP: Record<SafetyStatus, number> = {
+  safe:    9.2,
+  caution: 6.1,
+  banned:  2.8,
+};
+
+const STATUS_LABEL: Record<SafetyStatus, string> = {
+  safe:    "Safe",
+  caution: "Caution",
+  banned:  "Banned",
+};
+
+const STATUS_COLOR: Record<SafetyStatus, string> = {
+  safe:    "#22c55e",
+  caution: "#f59e0b",
+  banned:  "#ef4444",
+};
+
+// Animated score bar
+function ScoreBar({ score, delay = 0 }: { score: number; delay?: number }) {
+  const ref = useRef<HTMLDivElement>(null);
+  const [animated, setAnimated] = useState(false);
+
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const observer = new IntersectionObserver(
+      ([entry]) => {
+        if (entry.isIntersecting && !animated) {
+          setTimeout(() => setAnimated(true), delay);
+          observer.unobserve(el);
+        }
+      },
+      { threshold: 0.3 }
+    );
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [animated, delay]);
+
+  return (
+    <div ref={ref} className="score-bar">
+      <div
+        className="score-bar-fill"
+        style={{ transform: animated ? `scaleX(${score / 10})` : "scaleX(0)" }}
+      />
+    </div>
+  );
 }
 
 export default function ProductCard({
@@ -45,6 +93,8 @@ export default function ProductCard({
   const { toast } = useToast();
   const queryClient = useQueryClient();
   const [showDeleteDialog, setShowDeleteDialog] = useState(false);
+  const score = SCORE_MAP[safetyStatus];
+  const color = STATUS_COLOR[safetyStatus];
 
   const deleteMutation = useMutation({
     mutationFn: async () => apiRequest("DELETE", `/api/products/${id}`, {}),
@@ -62,65 +112,202 @@ export default function ProductCard({
 
   const CardContent = () => (
     <div
-      className={cn(
-        "group relative rounded-2xl overflow-hidden transition-all duration-500 ease-spring",
-        "glass glass-shimmer card-lift",
-        "flex flex-col"
-      )}
+      className="glass-card"
+      style={{ display: "flex", flexDirection: "column", height: "100%" }}
+      data-testid={`card-product-${id}`}
     >
-      {/* Image section */}
-      <div className="relative aspect-[4/3] overflow-hidden">
+      {/* Image */}
+      <div
+        style={{
+          position: "relative",
+          height: "240px",
+          overflow: "hidden",
+          borderRadius: "var(--radius-xl) var(--radius-xl) 0 0",
+          flexShrink: 0,
+        }}
+      >
         <img
           src={imageUrl}
           alt={name}
-          className="w-full h-full object-cover transition-transform duration-700 group-hover:scale-[1.08]"
+          loading="lazy"
+          decoding="async"
           data-testid={`img-product-${id}`}
+          style={{
+            width: "100%",
+            height: "100%",
+            objectFit: "cover",
+            transition: "transform 600ms var(--ease-out)",
+          }}
+          onMouseEnter={(e) => ((e.currentTarget as HTMLImageElement).style.transform = "scale(1.06)")}
+          onMouseLeave={(e) => ((e.currentTarget as HTMLImageElement).style.transform = "scale(1)")}
         />
-        {/* Gradient overlay — reveals on hover */}
-        <div className="absolute inset-0 bg-gradient-to-t from-black/70 via-transparent to-transparent opacity-40 group-hover:opacity-100 transition-opacity duration-500" />
-        {/* Subtle color cast matching safety status */}
+        {/* Gradient overlay */}
         <div
-          className={cn(
-            "absolute inset-0 opacity-0 group-hover:opacity-15 transition-opacity duration-500",
-            safetyStatus === "safe" && "bg-green-500",
-            safetyStatus === "caution" && "bg-amber-500",
-            safetyStatus === "banned" && "bg-red-500"
-          )}
+          style={{
+            position: "absolute",
+            inset: 0,
+            background: "linear-gradient(to top, rgba(8,12,16,0.6) 0%, transparent 50%)",
+          }}
         />
 
-        {/* Badges */}
-        <div className="absolute top-3 right-3 flex flex-col gap-2 items-end">
-          <SafetyBadge status={safetyStatus} size="md" />
-          {isAdmin && productStatus === "draft" && (
+        {/* Top badges */}
+        <div
+          style={{
+            position: "absolute",
+            top: "0.75rem",
+            left: "0.75rem",
+            right: "0.75rem",
+            display: "flex",
+            justifyContent: "space-between",
+            alignItems: "flex-start",
+          }}
+        >
+          {/* VERIFIED badge */}
+          <div
+            style={{
+              display: "inline-flex",
+              alignItems: "center",
+              gap: "0.25rem",
+              padding: "0.25rem 0.625rem",
+              background: "rgba(0, 229, 200, 0.15)",
+              backdropFilter: "blur(12px)",
+              WebkitBackdropFilter: "blur(12px)",
+              border: "1px solid rgba(0, 229, 200, 0.30)",
+              borderRadius: "9999px",
+              fontFamily: "var(--font-body)",
+              fontSize: "0.65rem",
+              fontWeight: 700,
+              color: "var(--fp-teal-bright)",
+              letterSpacing: "0.06em",
+              textTransform: "uppercase",
+            }}
+          >
+            <CheckCircle size={10} />
+            Verified
+          </div>
+
+          {/* Safety score */}
+          <div
+            style={{
+              display: "inline-flex",
+              alignItems: "center",
+              gap: "0.25rem",
+              padding: "0.25rem 0.625rem",
+              background: "rgba(8, 12, 16, 0.75)",
+              backdropFilter: "blur(12px)",
+              WebkitBackdropFilter: "blur(12px)",
+              border: `1px solid ${color}40`,
+              borderRadius: "9999px",
+              fontFamily: "var(--font-display)",
+              fontSize: "0.7rem",
+              fontWeight: 800,
+              color,
+              letterSpacing: "-0.01em",
+            }}
+          >
+            {score} / 10
+          </div>
+        </div>
+
+        {/* Admin draft badge */}
+        {isAdmin && productStatus === "draft" && (
+          <div
+            style={{
+              position: "absolute",
+              bottom: "0.75rem",
+              left: "0.75rem",
+            }}
+          >
             <Badge
               variant="secondary"
-              className="text-[10px] glass-subtle rounded-lg border-none"
+              className="glass-subtle text-[10px] rounded-lg border-none"
               data-testid={`badge-draft-${id}`}
             >
               Draft
             </Badge>
-          )}
-        </div>
+          </div>
+        )}
       </div>
 
       {/* Card body */}
-      <div className="flex flex-col flex-1 p-5 space-y-3">
+      <div
+        style={{
+          flex: 1,
+          padding: "1.25rem",
+          display: "flex",
+          flexDirection: "column",
+          gap: "0.875rem",
+        }}
+      >
+        {/* Brand + name */}
         <div>
-          <p className="text-xs font-semibold uppercase tracking-widest text-primary/80 mb-1">
+          <p
+            style={{
+              fontFamily: "var(--font-body)",
+              fontSize: "0.7rem",
+              fontWeight: 600,
+              textTransform: "uppercase",
+              letterSpacing: "0.08em",
+              color: "var(--fp-text-muted)",
+              marginBottom: "0.25rem",
+            }}
+          >
             {brand}
           </p>
-          <h3 className="font-display font-700 text-base leading-tight line-clamp-2 text-foreground group-hover:text-primary transition-colors duration-300">
+          <h3
+            className="font-display"
+            style={{
+              fontSize: "var(--text-base)",
+              fontWeight: 700,
+              lineHeight: 1.25,
+              letterSpacing: "-0.02em",
+              color: "var(--fp-text-primary)",
+              display: "-webkit-box",
+              WebkitLineClamp: 2,
+              WebkitBoxOrient: "vertical",
+              overflow: "hidden",
+            }}
+          >
             {name}
           </h3>
         </div>
 
+        {/* Score bar */}
+        <div style={{ display: "flex", flexDirection: "column", gap: "0.375rem" }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+            <span
+              style={{
+                fontFamily: "var(--font-body)",
+                fontSize: "0.7rem",
+                color: "var(--fp-text-muted)",
+                letterSpacing: "0.02em",
+              }}
+            >
+              Safety Score
+            </span>
+            <span
+              style={{
+                fontFamily: "var(--font-display)",
+                fontSize: "0.75rem",
+                fontWeight: 700,
+                color,
+              }}
+            >
+              {STATUS_LABEL[safetyStatus]}
+            </span>
+          </div>
+          <ScoreBar score={score} />
+        </div>
+
+        {/* CTA or Admin actions */}
         {isAdmin ? (
-          <div className="flex flex-col gap-2 pt-1">
-            <div className="flex gap-2">
+          <div style={{ display: "flex", flexDirection: "column", gap: "0.5rem", marginTop: "auto" }}>
+            <div style={{ display: "flex", gap: "0.5rem" }}>
               <Button
                 size="sm"
                 variant="outline"
-                className="flex-1 h-8 text-xs rounded-xl border-white/10 hover:border-white/20 glass-subtle"
+                className="flex-1 h-8 text-xs rounded-xl"
+                style={{ borderColor: "var(--fp-glass-border)", background: "var(--fp-glass-base)" }}
                 onClick={() => setLocation(`/admin/edit/${id}`)}
                 data-testid={`button-edit-${id}`}
               >
@@ -131,7 +318,8 @@ export default function ProductCard({
                 <Button
                   size="sm"
                   variant="ghost"
-                  className="h-8 text-xs rounded-xl hover:bg-white/8"
+                  className="h-8 text-xs rounded-xl"
+                  style={{ color: "var(--fp-text-muted)" }}
                   data-testid={`button-view-${id}`}
                 >
                   View
@@ -164,16 +352,28 @@ export default function ProductCard({
                     disabled={deleteMutation.isPending}
                     className="rounded-xl bg-destructive text-destructive-foreground hover:bg-destructive/90"
                   >
-                    {deleteMutation.isPending ? "Deleting..." : "Delete"}
+                    {deleteMutation.isPending ? "Deleting…" : "Delete"}
                   </AlertDialogAction>
                 </AlertDialogFooter>
               </AlertDialogContent>
             </AlertDialog>
           </div>
         ) : (
-          <div className="flex items-center gap-1.5 text-primary text-sm font-semibold mt-auto pt-1 group-hover:gap-3 transition-all duration-400">
-            <span>View Safety Report</span>
-            <ArrowUpRight className="h-3.5 w-3.5 transition-transform duration-300 group-hover:-translate-y-0.5 group-hover:translate-x-0.5" />
+          <div
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: "0.375rem",
+              marginTop: "auto",
+              fontFamily: "var(--font-body)",
+              fontSize: "var(--text-sm)",
+              fontWeight: 600,
+              color: "var(--fp-teal-bright)",
+              transition: "gap var(--dur-fast) var(--ease-out)",
+            }}
+          >
+            View Full Report
+            <ArrowUpRight size={14} />
           </div>
         )}
       </div>
@@ -181,16 +381,12 @@ export default function ProductCard({
   );
 
   if (isAdmin) {
-    return (
-      <div data-testid={`card-product-${id}`}>
-        <CardContent />
-      </div>
-    );
+    return <CardContent />;
   }
 
   return (
     <Link href={`/product/${id}`}>
-      <a data-testid={`card-product-${id}`} className="block h-full">
+      <a className="block h-full" style={{ textDecoration: "none" }}>
         <CardContent />
       </a>
     </Link>

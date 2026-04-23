@@ -1,142 +1,196 @@
-import { ArrowDown, Leaf, FlaskConical, ShieldCheck } from "lucide-react";
+import { ChevronDown, FlaskConical, Leaf, ShieldCheck } from "lucide-react";
 
 const TRUST_PILLS = [
   { icon: FlaskConical, label: "AI-Verified" },
-  { icon: Leaf, label: "Science-Backed" },
-  { icon: ShieldCheck, label: "Transparent" },
+  { icon: Leaf,         label: "Science-Backed" },
+  { icon: ShieldCheck,  label: "Transparent" },
 ];
 
 export default function Hero() {
-  const scrollToProducts = () => {
-    document.getElementById("products")?.scrollIntoView({ behavior: "smooth" });
-  };
+  const scrollTo = (id: string) =>
+    document.querySelector(id)?.scrollIntoView({ behavior: "smooth" });
 
   return (
-    <section className="relative pt-32 pb-6 flex flex-col items-center justify-center overflow-hidden px-4">
-      {/* Hero glass card — liquid glass surface floating on the vivid ambient background */}
-      <div className="relative z-10 w-full max-w-3xl mx-auto">
+    <section
+      style={{
+        position: "relative",
+        minHeight: "100dvh",
+        display: "grid",
+        placeItems: "center",
+        overflow: "hidden",
+        padding: "0 1.5rem",
+      }}
+    >
+      {/* Localised hero background radial — breathing animation */}
+      <div
+        style={{
+          position: "absolute",
+          inset: 0,
+          background: `
+            radial-gradient(ellipse 80% 60% at 50% 100%, rgba(0, 229, 200, 0.14) 0%, transparent 70%),
+            radial-gradient(ellipse 50% 35% at 15% 15%, rgba(0, 191, 165, 0.07) 0%, transparent 60%),
+            radial-gradient(ellipse 35% 28% at 85% 85%, rgba(127, 255, 212, 0.05) 0%, transparent 50%)
+          `,
+          animation: "hero-breathe 8s ease-in-out infinite",
+          pointerEvents: "none",
+        }}
+        aria-hidden
+      />
 
-        {/* Aurora prismatic border layer */}
+      {/* Content centred column — max 800px */}
+      <div
+        style={{
+          position: "relative",
+          zIndex: 10,
+          width: "100%",
+          maxWidth: "800px",
+          display: "flex",
+          flexDirection: "column",
+          alignItems: "center",
+          textAlign: "center",
+          gap: "1.5rem",
+          paddingTop: "4rem",
+          paddingBottom: "2rem",
+        }}
+      >
+        {/* 1 — Eyebrow pill */}
         <div
-          className="absolute inset-0 rounded-3xl opacity-60 pointer-events-none"
+          className="glass-pill"
           style={{
-            background: "conic-gradient(from 0deg, hsl(158 82% 45% / 0.4), hsl(200 82% 55% / 0.3), hsl(260 75% 65% / 0.25), hsl(310 70% 60% / 0.2), hsl(158 82% 45% / 0.4))",
-            padding: "1px",
-            borderRadius: "1.5rem",
-            animation: "aurora-spin 12s linear infinite",
-          }}
-        />
-
-        <div
-          className="relative glass glass-shimmer rounded-3xl px-8 py-14 md:px-14 md:py-20 text-center space-y-7"
-          style={{
-            boxShadow:
-              "0 40px 100px rgba(0,0,0,0.35), 0 16px 40px rgba(0,0,0,0.20), inset 0 1px 0 rgba(255,255,255,0.16), inset 0 -1px 0 rgba(0,0,0,0.06)",
+            opacity: 0,
+            animation: "fade-in 0.5s var(--ease-out) 200ms forwards",
           }}
         >
-          {/* Eyebrow pill */}
-          <div
-            className="inline-flex items-center gap-2 glass-subtle px-4 py-1.5 rounded-full animate-fade-up"
-            style={{ animationDelay: "0ms", animationFillMode: "both" }}
-          >
-            <span className="relative flex h-2 w-2">
-              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-primary opacity-75" />
-              <span className="relative inline-flex rounded-full h-2 w-2 bg-primary" />
-            </span>
-            <span className="text-xs font-semibold uppercase tracking-[0.18em] text-muted-foreground">
-              Trust-as-a-Service Platform
-            </span>
-          </div>
-
-          {/* Headline — animated gradient */}
-          <h1
-            className="font-display font-extrabold leading-[1.04] tracking-tight animate-fade-up"
+          <span
             style={{
-              fontSize: "clamp(2.6rem, 6.5vw, 4.75rem)",
-              animationDelay: "80ms",
-              animationFillMode: "both",
+              display: "inline-block",
+              width: "6px",
+              height: "6px",
+              borderRadius: "50%",
+              background: "var(--fp-teal-bright)",
+              flexShrink: 0,
             }}
-          >
-            <span className="text-foreground">Know What's In</span>
-            <br />
-            <span className="text-gradient-animated">Every Product</span>
-          </h1>
-
-          {/* Sub-headline */}
-          <p
-            className="text-muted-foreground text-base md:text-lg max-w-xl mx-auto leading-relaxed animate-fade-up"
-            style={{ animationDelay: "160ms", animationFillMode: "both" }}
-          >
-            AI-powered ingredient safety reports backed by scientific research.
-            Every ingredient analyzed, every source cited — complete transparency.
-          </p>
-
-          {/* CTAs */}
-          <div
-            className="flex flex-col sm:flex-row gap-3 justify-center items-center pt-2 animate-fade-up"
-            style={{ animationDelay: "240ms", animationFillMode: "both" }}
-          >
-            {/* Primary CTA — shimmer gradient button */}
-            <button
-              onClick={scrollToProducts}
-              data-testid="button-explore-products"
-              className="group relative inline-flex items-center gap-2.5 px-8 py-3.5 rounded-full font-semibold text-sm overflow-hidden transition-all duration-500 hover:scale-[1.04] hover:-translate-y-0.5 active:scale-[0.97]"
-              style={{
-                background:
-                  "linear-gradient(135deg, hsl(158 82% 46%) 0%, hsl(168 82% 38%) 50%, hsl(158 72% 32%) 100%)",
-                color: "hsl(158 10% 5%)",
-                boxShadow:
-                  "0 8px 32px hsl(158 82% 45% / 0.40), 0 2px 8px hsl(158 82% 45% / 0.20), inset 0 1px 0 rgba(255,255,255,0.30)",
-              }}
-            >
-              <span className="relative z-10">Explore Products</span>
-              <ArrowDown className="relative z-10 h-4 w-4 transition-transform duration-400 group-hover:translate-y-0.5" />
-              {/* Shimmer sweep */}
-              <span className="absolute inset-0 bg-gradient-to-r from-transparent via-white/20 to-transparent -translate-x-full group-hover:translate-x-full transition-transform duration-700 ease-out" />
-            </button>
-
-            {/* Secondary CTA */}
-            <button
-              onClick={() =>
-                document.getElementById("how-it-works")?.scrollIntoView({ behavior: "smooth" })
-              }
-              className="glass-subtle inline-flex items-center gap-2 px-7 py-3.5 rounded-full text-sm font-medium text-muted-foreground hover:text-foreground transition-all duration-300 hover:scale-[1.03] hover:-translate-y-0.5"
-            >
-              How It Works
-            </button>
-          </div>
-
-          {/* Trust pills */}
-          <div
-            className="flex flex-wrap gap-2 justify-center pt-1 animate-fade-up"
-            style={{ animationDelay: "320ms", animationFillMode: "both" }}
-          >
-            {TRUST_PILLS.map(({ icon: Icon, label }) => (
-              <div
-                key={label}
-                className="glass-subtle flex items-center gap-1.5 px-3.5 py-1.5 rounded-full transition-all duration-300 hover:scale-105"
-              >
-                <Icon className="h-3 w-3 text-primary" />
-                <span className="text-xs font-medium text-muted-foreground">{label}</span>
-              </div>
-            ))}
-          </div>
+          />
+          Trust-as-a-Service Platform
         </div>
+
+        {/* 2+3 — Hero headline */}
+        <h1
+          className="font-display"
+          style={{
+            fontSize: "var(--text-hero)",
+            fontWeight: 700,
+            lineHeight: 1.04,
+            letterSpacing: "-0.03em",
+            margin: 0,
+            opacity: 0,
+            animation: "fade-in 0.6s var(--ease-out) 320ms forwards",
+          }}
+        >
+          <span style={{ color: "var(--fp-text-primary)", display: "block" }}>
+            Know What's In
+          </span>
+          <span
+            className="text-teal-gradient"
+            style={{ display: "block" }}
+          >
+            Every Product
+          </span>
+        </h1>
+
+        {/* 4 — Subtitle */}
+        <p
+          style={{
+            fontFamily: "var(--font-body)",
+            fontSize: "var(--text-lg)",
+            color: "var(--fp-text-secondary)",
+            maxWidth: "52ch",
+            lineHeight: 1.6,
+            margin: 0,
+            opacity: 0,
+            animation: "fade-in 0.6s var(--ease-out) 500ms forwards",
+          }}
+        >
+          AI-powered ingredient safety reports backed by peer-reviewed scientific
+          research. Every ingredient analyzed, every source cited.
+        </p>
+
+        {/* 5 — CTAs */}
+        <div
+          style={{
+            display: "flex",
+            flexWrap: "wrap",
+            gap: "0.75rem",
+            justifyContent: "center",
+            opacity: 0,
+            animation: "fade-in 0.6s var(--ease-out) 580ms forwards",
+          }}
+        >
+          <button
+            onClick={() => scrollTo("#products")}
+            className="btn-primary"
+            data-testid="button-explore-products"
+          >
+            Explore Products
+            <ChevronDown size={16} />
+          </button>
+          <button
+            onClick={() => scrollTo("#how-it-works")}
+            className="btn-ghost"
+          >
+            How It Works
+          </button>
+        </div>
+
+        {/* 6 — Trust pills */}
+        <div
+          style={{
+            display: "flex",
+            flexWrap: "wrap",
+            gap: "0.5rem",
+            justifyContent: "center",
+            opacity: 0,
+            animation: "fade-in 0.6s var(--ease-out) 640ms forwards",
+          }}
+        >
+          {TRUST_PILLS.map(({ icon: Icon, label }) => (
+            <div key={label} className="glass-pill" style={{ gap: "0.375rem" }}>
+              <Icon size={12} style={{ color: "var(--fp-teal-bright)" }} />
+              {label}
+            </div>
+          ))}
+        </div>
+
+        {/* 7 — Scroll cue */}
+        <button
+          onClick={() => scrollTo("#stats")}
+          aria-label="Scroll down"
+          style={{
+            display: "flex",
+            flexDirection: "column",
+            alignItems: "center",
+            gap: "0.5rem",
+            background: "none",
+            border: "none",
+            cursor: "pointer",
+            color: "var(--fp-teal-bright)",
+            opacity: 0.45,
+            marginTop: "0.5rem",
+            transition: "opacity var(--dur-fast) var(--ease-out)",
+            animation: "fade-in 0.5s var(--ease-out) 800ms forwards",
+          }}
+          onMouseEnter={(e) => ((e.currentTarget as HTMLElement).style.opacity = "0.8")}
+          onMouseLeave={(e) => ((e.currentTarget as HTMLElement).style.opacity = "0.45")}
+        >
+          <ChevronDown
+            size={20}
+            style={{ animation: "scroll-bounce 2s ease-in-out infinite" }}
+          />
+        </button>
       </div>
 
-      {/* Scroll indicator */}
-      <button
-        onClick={scrollToProducts}
-        className="mt-10 flex flex-col items-center gap-2 opacity-35 hover:opacity-65 transition-opacity duration-400 z-10"
-        aria-label="Scroll to products"
-      >
-        <div className="w-5 h-8 rounded-full border border-foreground/20 flex items-start justify-center pt-1.5">
-          <div
-            className="w-1 h-1.5 rounded-full bg-foreground/50"
-            style={{ animation: "float-orb-3 2s ease-in-out infinite" }}
-          />
-        </div>
-      </button>
+      {/* Sentinel div — IntersectionObserver uses this for nav glass activation */}
+      <div id="hero-scroll-sentinel" style={{ position: "absolute", bottom: 0, height: "1px", width: "100%" }} />
     </section>
   );
 }

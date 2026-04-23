@@ -13,9 +13,10 @@ export default function ProtectedRoute({ children, requireAdmin = false }: Prote
   const [, setLocation] = useLocation();
 
   useEffect(() => {
-    // Redirect to login if not authenticated
+    // Replace current history entry so back-button skips the protected route
+    // and returns to whatever the user was viewing before (e.g. home).
     if (!loading && !user) {
-      setLocation("/login");
+      setLocation("/login", { replace: true });
     }
   }, [user, loading, setLocation]);
 
