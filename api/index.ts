@@ -1,24 +1,23 @@
-// Vercel serverless function entry point
-// Wraps server startup to expose crash details via /api/health if init fails
+// Vercel serverless function entry — diagnostic wrapper to surface startup crash
+import type { IncomingMessage, ServerResponse } from "node:http";
 
 let app: any = null;
-let startupError: any = null;
+let startupError: string | null = null;
 
 try {
   const mod = await import("../server/index.js");
   app = mod.default;
 } catch (err: any) {
-  startupError = err;
-  console.error("STARTUP CRASH:", err?.message, err?.stack);
+  startupError = `${err?.message || String(err)}\n\nStack: ${err?.stack || "none"}`;
+  console.error("STARTUP CRASH:", startupError);
 }
 
-export default function handler(req: any, res: any) {
+export default function handler(req: IncomingMessage, res: ServerResponse) {
   if (startupError) {
-    res.status(500).json({
-      error: "Server startup failed",
-      message: startupError?.message || String(startupError),
-      stack: process.env.NODE_ENV !== "production" ? startupError?.stack : undefined,
-    });
+    const body = JSON.stringify({ error: "startup_failed", detail: startupError });
+    res.statusCode = 500;
+    res.setHeader("Content-Type", "application/json");
+    res.end(body);
     return;
   }
   return app(req, res);
