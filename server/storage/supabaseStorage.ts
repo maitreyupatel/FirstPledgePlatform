@@ -42,6 +42,8 @@ export interface UpdateProductInput {
 
 export interface ListProductsOptions {
   includeUnpublished?: boolean;
+  limit?: number;
+  offset?: number;
 }
 
 export class SupabaseStorage {
@@ -64,7 +66,7 @@ export class SupabaseStorage {
   }
 
   async list(options: ListProductsOptions = {}): Promise<Product[]> {
-    const { includeUnpublished = false } = options;
+    const { includeUnpublished = false, limit = 100, offset = 0 } = options;
 
     let query = this.supabase
       .from("products")
@@ -72,7 +74,8 @@ export class SupabaseStorage {
         *,
         ingredients (*)
       `)
-      .order("created_at", { ascending: false });
+      .order("created_at", { ascending: false })
+      .range(offset, offset + limit - 1);
 
     if (!includeUnpublished) {
       query = query.eq("status", "published");
@@ -86,6 +89,19 @@ export class SupabaseStorage {
     }
 
     return (data || []).map((row) => this.mapRowToProduct(row));
+  }
+
+  async findByNameAndBrand(name: string, brand: string): Promise<Product | null> {
+    const { data, error } = await this.supabase
+      .from("products")
+      .select("id, name, brand, status")
+      .ilike("name", name.trim())
+      .ilike("brand", brand.trim())
+      .limit(1)
+      .maybeSingle();
+
+    if (error || !data) return null;
+    return data as unknown as Product;
   }
 
   async getById(
@@ -511,7 +527,7 @@ export class SupabaseStorage {
     now: string,
     existing: Ingredient[] = [],
   ): Ingredient {
-    const defaultSource = "https://example.com/research";
+    const defaultSource = `https://www.ewg.org/skindeep/search/?query=${encodeURIComponent(ingredient.name)}`;
     const existingIngredient = ingredient.id
       ? existing.find((item) => item.id === ingredient.id)
       : undefined;

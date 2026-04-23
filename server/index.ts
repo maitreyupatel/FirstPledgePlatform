@@ -19,6 +19,7 @@ import { buildSourceUrl as buildEwgSourceUrl } from "./utils/ewgUrlBuilder";
 import { AIVettingService } from "./services/aiVettingService";
 import { CitationService } from "./services/citationService";
 import { requireAuth, optionalAuth } from "./middleware/auth";
+import { buildCronRouter } from "./routes/cron";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -557,6 +558,9 @@ app.post("/api/vet-ingredients", vetIngredientsLimiter, async (req, res) => {
     });
   }
 });
+
+// Cron routes — protected by CRON_SECRET, invoked by Vercel scheduler
+app.use("/api/cron", buildCronRouter(aiVettingService, getStorage()));
 
 const assetsDirectory = path.resolve(
   __dirname,

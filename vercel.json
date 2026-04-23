@@ -18,9 +18,19 @@
   ],
   "functions": {
     "api/index.ts": {
-      "maxDuration": 30,
+      "maxDuration": 60,
       "includeFiles": "server/**"
     }
-  }
+  },
+  "crons": [
+    {
+      "path": "/api/cron/daily-ingest",
+      "schedule": "0 9 * * *"
+    },
+    {
+      "path": "/api/cron/refresh-stale-ingredients",
+      "schedule": "0 2 * * 0"
+    }
+  ]
 }
 
