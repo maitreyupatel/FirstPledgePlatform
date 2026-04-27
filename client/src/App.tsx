@@ -7,6 +7,7 @@ import ProtectedRoute from "@/components/auth/ProtectedRoute";
 import LoginForm from "@/components/auth/LoginForm";
 import Home from "@/pages/Home";
 import ProductDetail from "@/pages/ProductDetail";
+import ProductCatalog from "@/pages/ProductCatalog";
 import AdminDashboard from "@/pages/AdminDashboard";
 import ProductForm from "@/pages/ProductForm";
 import NotFound from "@/pages/not-found";
@@ -64,6 +65,7 @@ function Router() {
   return (
     <Switch>
       <Route path="/" component={Home} />
+      <Route path="/products" component={ProductCatalog} />
       <Route path="/product/:id" component={ProductDetail} />
       <Route path="/login" component={LoginForm} />
       <Route path="/admin">

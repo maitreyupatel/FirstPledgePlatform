@@ -40,9 +40,9 @@ function ShieldLogo({ size = 28 }: { size?: number }) {
 }
 
 const NAV_LINKS = [
-  { href: "#products",     label: "Products" },
-  { href: "#how-it-works", label: "How It Works" },
-  { href: "#ingredients",  label: "Ingredients" },
+  { href: "/products",     label: "Products",     isRoute: true },
+  { href: "#how-it-works", label: "How It Works", isRoute: false },
+  { href: "#ingredients",  label: "Ingredients",  isRoute: false },
 ];
 
 export default function Header({ showAdminLink = false }: HeaderProps) {
@@ -112,11 +112,17 @@ export default function Header({ showAdminLink = false }: HeaderProps) {
 
           {/* Desktop nav */}
           <nav className="hidden md:flex items-center gap-1">
-            {NAV_LINKS.map(({ href, label }) => (
-              <button key={label} onClick={() => scrollTo(href)} className="fp-nav-link" style={navLinkStyle}>
-                {label}
-              </button>
-            ))}
+            {NAV_LINKS.map(({ href, label, isRoute }) =>
+              isRoute ? (
+                <Link key={label} href={href} className="fp-nav-link" style={{ ...navLinkStyle, display: "block" }}>
+                  {label}
+                </Link>
+              ) : (
+                <button key={label} onClick={() => scrollTo(href)} className="fp-nav-link" style={navLinkStyle}>
+                  {label}
+                </button>
+              )
+            )}
             {showAdminLink && (
               <Link href="/admin" className="fp-nav-link" data-testid="link-admin">
                 Admin
@@ -182,30 +188,51 @@ export default function Header({ showAdminLink = false }: HeaderProps) {
             gap: "0.25rem",
           }}
         >
-          {NAV_LINKS.map(({ href, label }) => (
-            <button
-              key={label}
-              onClick={() => scrollTo(href)}
-              style={{
-                display: "block",
-                width: "100%",
-                textAlign: "left",
-                padding: "1rem 0",
-                fontFamily: "var(--font-display)",
-                fontSize: "var(--text-xl)",
-                fontWeight: 700,
-                color: "var(--fp-text-secondary)",
-                background: "none",
-                border: "none",
-                borderBottom: "1px solid var(--fp-glass-border)",
-                cursor: "pointer",
-                letterSpacing: "-0.02em",
-                transition: "color var(--dur-fast) var(--ease-out)",
-              }}
-            >
-              {label}
-            </button>
-          ))}
+          {NAV_LINKS.map(({ href, label, isRoute }) =>
+            isRoute ? (
+              <Link
+                key={label}
+                href={href}
+                onClick={() => setMenuOpen(false)}
+                style={{
+                  display: "block",
+                  padding: "1rem 0",
+                  fontFamily: "var(--font-display)",
+                  fontSize: "var(--text-xl)",
+                  fontWeight: 700,
+                  color: "var(--fp-text-secondary)",
+                  borderBottom: "1px solid var(--fp-glass-border)",
+                  textDecoration: "none",
+                  letterSpacing: "-0.02em",
+                }}
+              >
+                {label}
+              </Link>
+            ) : (
+              <button
+                key={label}
+                onClick={() => scrollTo(href)}
+                style={{
+                  display: "block",
+                  width: "100%",
+                  textAlign: "left",
+                  padding: "1rem 0",
+                  fontFamily: "var(--font-display)",
+                  fontSize: "var(--text-xl)",
+                  fontWeight: 700,
+                  color: "var(--fp-text-secondary)",
+                  background: "none",
+                  border: "none",
+                  borderBottom: "1px solid var(--fp-glass-border)",
+                  cursor: "pointer",
+                  letterSpacing: "-0.02em",
+                  transition: "color var(--dur-fast) var(--ease-out)",
+                }}
+              >
+                {label}
+              </button>
+            )
+          )}
           {showAdminLink && (
             <Link
               href="/admin"

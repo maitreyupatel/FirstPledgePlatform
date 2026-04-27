@@ -173,22 +173,32 @@ export class AIVettingService {
   }
 
   async analyzeIngredients(ingredientNames: string[]): Promise<IngredientAnalysis[]> {
-    if (ingredientNames.length === 0) {
-      return [];
-    }
+    if (ingredientNames.length === 0) return [];
 
-    // Process ingredients sequentially with delays to avoid rate limits
-    // This helps prevent 429 errors by spacing out requests
     const analyses: IngredientAnalysis[] = [];
-    const delayBetweenRequests = 2000; // 2 seconds between requests
 
     for (let i = 0; i < ingredientNames.length; i++) {
-      const analysis = await this.analyzeIngredient(ingredientNames[i]);
+      const name = ingredientNames[i];
+
+      // Check cache before calling analyzeIngredient so we know whether
+      // a Groq API call will be made — cached hits need no rate-limit delay
+      let isCacheHit = false;
+      if (this.analysisService) {
+        try {
+          const cached = await this.analysisService.getAnalysis(name);
+          isCacheHit = !!(cached && !this.analysisService.shouldRefreshAnalysis(cached));
+        } catch { /* ignore */ }
+      }
+
+      const analysis = await this.analyzeIngredient(name);
       analyses.push(analysis);
-      
-      // Add delay between requests (except for the last one)
-      if (i < ingredientNames.length - 1) {
-        await this.sleep(delayBetweenRequests);
+
+      // Only delay when a fresh Groq API call was made (not on cache hits).
+      // Groq free tier: 30 req/min → 2s between requests is safe.
+      // Cache hits are instant and don't consume rate-limit quota.
+      const isLast = i === ingredientNames.length - 1;
+      if (!isCacheHit && !isLast) {
+        await this.sleep(2000);
       }
     }
 

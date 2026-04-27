@@ -51,9 +51,12 @@ export function buildCronRouter(
       return;
     }
 
-    // Hard cap: 2 products × 8 ingredients × 2s = 32s — stays within 60s Vercel Hobby limit
-    const COUNT = Math.min(parseInt(process.env.CRON_PRODUCTS_PER_DAY ?? "2", 10), 2);
-    const MAX_INGREDIENTS = 8;
+    // 1 product per run to maximize ingredient coverage per product.
+    // Cached ingredients = instant (no delay). New ingredients = 2s each.
+    // Typical product: 10-15 ingr, ~5-10 new = 10-20s. Well within 60s Hobby.
+    const COUNT = Math.min(parseInt(process.env.CRON_PRODUCTS_PER_DAY ?? "1", 10), 2);
+    // No hard cap — analyze ALL ingredients. Timeout guard at 50s stops if needed.
+    const MAX_INGREDIENTS = 50;
 
     console.log(`[cron/daily-ingest] START — fetching ${COUNT} products`);
     const startMs = Date.now();

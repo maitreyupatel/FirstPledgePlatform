@@ -26,9 +26,11 @@ interface OFFApiResponse {
 interface OFFApiProduct {
   _id: string;
   product_name?: string;
+  product_name_en?: string;    // English product name (when available)
   brands?: string;
   image_front_url?: string;
-  ingredients_text?: string;
+  ingredients_text?: string;   // local language (may be French, German, etc.)
+  ingredients_text_en?: string; // English translation — PREFER THIS
   categories?: string;
   unique_scans_n?: number;
   completeness?: number;
@@ -196,7 +198,7 @@ export class OpenFoodFactsService {
     const params = new URLSearchParams({
       categories_tags: category,
       countries_tags: countryTag,
-      fields: "_id,product_name,brands,image_front_url,ingredients_text,categories,unique_scans_n,completeness",
+      fields: "_id,product_name,product_name_en,brands,image_front_url,ingredients_text,ingredients_text_en,categories,unique_scans_n,completeness",
       page_size: String(count * 4),
       page: String(page),
       sort_by: "unique_scans_n",
@@ -224,7 +226,7 @@ export class OpenFoodFactsService {
     // Use v2 search API — more reliable than category browse endpoint
     const params = new URLSearchParams({
       categories_tags: category,
-      fields: "_id,product_name,brands,image_front_url,ingredients_text,categories,unique_scans_n,completeness",
+      fields: "_id,product_name,product_name_en,brands,image_front_url,ingredients_text,ingredients_text_en,categories,unique_scans_n,completeness",
       page_size: String(count * 4),
       page: String(page),
       sort_by: "unique_scans_n",
@@ -256,7 +258,7 @@ export class OpenFoodFactsService {
     page: number
   ): Promise<OFFProduct[]> {
     const base = source === "beauty" ? BEAUTY_API_BASE : FOOD_API_BASE;
-    const url = `${base}/cgi/search.pl?action=process&tagtype_0=categories&tag_contains_0=contains&tag_0=${encodeURIComponent(category)}&json=1&page_size=${count * 4}&page=${page}&sort_by=unique_scans_n&fields=_id,product_name,brands,image_front_url,ingredients_text,categories`;
+    const url = `${base}/cgi/search.pl?action=process&tagtype_0=categories&tag_contains_0=contains&tag_0=${encodeURIComponent(category)}&json=1&page_size=${count * 4}&page=${page}&sort_by=unique_scans_n&fields=_id,product_name,product_name_en,brands,image_front_url,ingredients_text,ingredients_text_en,categories`;
 
     const res = await fetch(url, {
       headers: { "User-Agent": "FirstPledgePlatform/1.0 (maitreypatel@getpowerplay.in)" },
@@ -293,25 +295,31 @@ export class OpenFoodFactsService {
   }
 
   private isUsable(p: OFFApiProduct): boolean {
-    const name = p.product_name?.trim();
-    const text = p.ingredients_text?.trim();
+    const name = (p.product_name_en || p.product_name)?.trim();
+    // Accept if either English or local-language ingredient text is usable
+    const textEn = p.ingredients_text_en?.trim();
+    const textLocal = p.ingredients_text?.trim();
+    const text = textEn || textLocal;
     if (!name || !text || text.length < 15) return false;
-    // Reject if ingredient text is mostly digits/codes (corrupt OFF data)
     const letterRatio = (text.match(/[a-zA-Z]/g) || []).length / text.length;
     if (letterRatio < 0.4) return false;
-    // Must have at least one comma or semicolon (real ingredient lists do)
     if (!/[,;]/.test(text)) return false;
     return true;
   }
 
   private normalize(p: OFFApiProduct, source: "food" | "beauty"): OFFProduct {
+    // Prefer English ingredient text — avoids French/German ingredient names on display
+    const ingredientsText = p.ingredients_text_en?.trim() || p.ingredients_text?.trim() || "";
+    // Prefer English product name
+    const name = this.cleanName(p.product_name_en?.trim() || p.product_name || "Unknown Product");
+
     return {
       id: p._id,
       barcode: p._id,
-      name: this.cleanName(p.product_name ?? "Unknown Product"),
+      name,
       brand: this.cleanName(p.brands ?? "Unknown Brand"),
       imageUrl: p.image_front_url ?? "",
-      ingredientsText: p.ingredients_text ?? "",
+      ingredientsText,
       categories: p.categories ?? "",
       source,
     };
