@@ -62,10 +62,16 @@ export function buildCronRouter(
     const startMs = Date.now();
 
     const results: Array<{ name: string; status: string; published: boolean; reason?: string }> = [];
+    // Prevent multiple products from the same brand in a single run (e.g. 3 Coca-Cola variants)
+    const brandsAddedThisRun = new Set<string>();
 
     let products;
     try {
-      products = await offService.fetchDailyProducts(COUNT);
+      // Pass checkExists so barcode fallbacks skip products already in DB
+      products = await offService.fetchDailyProducts(COUNT, async (name, brand) => {
+        const existing = await getStorage().findByNameAndBrand(name, brand);
+        return !!existing;
+      });
     } catch (err) {
       console.error("[cron/daily-ingest] OFF fetch failed:", err);
       res.status(502).json({ error: "Failed to fetch from Open Food Facts", detail: String(err) });
@@ -91,6 +97,13 @@ export function buildCronRouter(
         if (existing) {
           console.log(`[cron/daily-ingest] Skip "${offProduct.name}" — already in DB`);
           results.push({ name: offProduct.name, status: "skipped", published: false, reason: "already exists" });
+          continue;
+        }
+
+        const normalizedBrand = offProduct.brand.toLowerCase().trim();
+        if (brandsAddedThisRun.has(normalizedBrand)) {
+          console.log(`[cron/daily-ingest] Skip "${offProduct.name}" — brand "${offProduct.brand}" already added this run`);
+          results.push({ name: offProduct.name, status: "skipped", published: false, reason: "brand already added this run" });
           continue;
         }
 
@@ -125,6 +138,8 @@ export function buildCronRouter(
             isOverride: false,
           })),
         });
+
+        brandsAddedThisRun.add(normalizedBrand);
 
         const elapsed = ((Date.now() - startMs) / 1000).toFixed(1);
         console.log(`[cron/daily-ingest] ✅ "${offProduct.name}" → ${shouldPublish ? "published" : "draft"} (conf=${overallConfidence.toFixed(2)}, ${elapsed}s elapsed)`);

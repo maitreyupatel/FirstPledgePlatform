@@ -559,6 +559,38 @@ app.post("/api/vet-ingredients", vetIngredientsLimiter, async (req, res) => {
   }
 });
 
+// Admin cron observability — shows recent ingestion history
+app.get("/api/admin/cron-status", requireAuth, async (_req, res) => {
+  try {
+    const storageInstance = getStorage();
+    const allProducts = await storageInstance.list({ includeUnpublished: false, limit: 500 });
+
+    const now = new Date();
+    const last7Days: Array<{ date: string; added: number }> = [];
+    for (let i = 6; i >= 0; i--) {
+      const d = new Date(now);
+      d.setUTCDate(d.getUTCDate() - i);
+      const dateStr = d.toISOString().slice(0, 10);
+      const count = allProducts.filter((p) => p.createdAt?.slice(0, 10) === dateStr).length;
+      last7Days.push({ date: dateStr, added: count });
+    }
+
+    const nextRunUTC = new Date(now);
+    nextRunUTC.setUTCHours(9, 0, 0, 0);
+    if (nextRunUTC <= now) nextRunUTC.setUTCDate(nextRunUTC.getUTCDate() + 1);
+
+    res.json({
+      total_products: allProducts.length,
+      last_7_days: last7Days,
+      cron_schedule: "0 9 * * *",
+      next_run_utc: nextRunUTC.toISOString(),
+    });
+  } catch (error) {
+    console.error("Error in /api/admin/cron-status:", error);
+    res.status(500).json({ error: "Failed to fetch cron status" });
+  }
+});
+
 // Cron routes — protected by CRON_SECRET, invoked by Vercel scheduler
 // Pass getStorage as a lazy getter so cron routes only init storage on first request
 app.use("/api/cron", buildCronRouter(aiVettingService, getStorage));

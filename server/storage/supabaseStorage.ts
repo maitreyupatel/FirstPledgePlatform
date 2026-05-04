@@ -91,6 +91,16 @@ export class SupabaseStorage {
     return (data || []).map((row) => this.mapRowToProduct(row));
   }
 
+  async countProductsAfter(isoDate: string): Promise<number> {
+    const { count, error } = await this.supabase
+      .from("products")
+      .select("id", { count: "exact", head: true })
+      .eq("status", "published")
+      .gte("created_at", isoDate);
+    if (error) throw new Error(`countProductsAfter failed: ${error.message}`);
+    return count ?? 0;
+  }
+
   async findByNameAndBrand(name: string, brand: string): Promise<Product | null> {
     const { data, error } = await this.supabase
       .from("products")
