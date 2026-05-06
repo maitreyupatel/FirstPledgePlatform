@@ -1,9 +1,12 @@
 import { useQuery } from "@tanstack/react-query";
 import { useEffect, useRef, useState } from "react";
+import { Link } from "wouter";
 import Header from "@/components/Header";
 import Hero from "@/components/Hero";
 import ProductCard from "@/components/ProductCard";
 import { ArrowRight, Search, Github, Twitter, Linkedin } from "lucide-react";
+
+const PRODUCT_PREVIEW_LIMIT = 8;
 
 interface Product {
   id: string;
@@ -143,8 +146,6 @@ const TESTIMONIALS = [
   },
 ];
 
-const CATEGORIES = ["All", "Supplements", "Skincare", "Food & Drink", "Personal Care"];
-
 // 8 repetitions ensures scrollWidth >> viewport at all screen sizes,
 // so translateX(-50%) never reveals empty space on the right.
 const TICKER_UNIQUE = ["PubMed", "FDA", "EWG", "EFSA", "WHO", "CIR", "NIH", "NICNAS"];
@@ -252,7 +253,6 @@ export default function Home() {
     queryKey: ["/api/products"],
   });
 
-  const [activeCategory, setActiveCategory] = useState("All");
   const [activeIngredient, setActiveIngredient] = useState(DEMO_INGREDIENTS[0]);
   const [ingredientSearch, setIngredientSearch] = useState("");
 
@@ -351,24 +351,6 @@ export default function Home() {
             </p>
           </div>
 
-          {/* Category filter pills */}
-          <div
-            style={{ display: "flex", flexWrap: "wrap", gap: "0.5rem", marginBottom: "2.5rem" }}
-            role="tablist"
-          >
-            {CATEGORIES.map((cat) => (
-              <button
-                key={cat}
-                role="tab"
-                aria-selected={activeCategory === cat}
-                onClick={() => setActiveCategory(cat)}
-                className={`glass-pill glass-pill--interactive ${activeCategory === cat ? "active" : ""}`}
-              >
-                {cat}
-              </button>
-            ))}
-          </div>
-
           {/* Product grid */}
           {isLoading ? (
             <div
@@ -401,7 +383,7 @@ export default function Home() {
                 gap: "1.5rem",
               }}
             >
-              {products.map((product, i) => (
+              {products.slice(0, PRODUCT_PREVIEW_LIMIT).map((product, i) => (
                 <div
                   key={product.id}
                   style={{
@@ -425,6 +407,45 @@ export default function Home() {
               style={{ padding: "6rem 2rem", textAlign: "center" }}
             >
               <p style={{ color: "var(--fp-text-muted)" }}>No products available yet. Check back soon!</p>
+            </div>
+          )}
+
+          {/* See All Products CTA — only when truncation is actually happening */}
+          {products && products.length > PRODUCT_PREVIEW_LIMIT && (
+            <div
+              style={{
+                display: "flex",
+                flexDirection: "column",
+                alignItems: "center",
+                gap: "1rem",
+                marginTop: "3rem",
+                paddingTop: "2.5rem",
+                borderTop: "1px solid var(--fp-glass-border)",
+              }}
+            >
+              <p
+                style={{
+                  fontFamily: "var(--font-body)",
+                  fontSize: "var(--text-sm)",
+                  color: "var(--fp-text-muted)",
+                  margin: 0,
+                  letterSpacing: "-0.01em",
+                }}
+              >
+                Showing {PRODUCT_PREVIEW_LIMIT} of{" "}
+                <span style={{ color: "var(--fp-text-secondary)", fontWeight: 600 }}>
+                  {products.length}
+                </span>{" "}
+                vetted products
+              </p>
+              <Link
+                href="/products"
+                className="btn-primary"
+                style={{ gap: "0.625rem", cursor: "pointer", textDecoration: "none" }}
+              >
+                See All Products
+                <ArrowRight size={16} />
+              </Link>
             </div>
           )}
         </div>

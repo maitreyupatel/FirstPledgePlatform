@@ -141,3 +141,4 @@ vite.config.ts.timestamp-*
 # gstack local data (security reports, sessions, analytics — keep off remote)
 .gstack/
 .vercel
+.claude/settings.local.json
