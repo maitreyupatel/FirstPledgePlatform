@@ -1,5 +1,16 @@
 # Changelog
 
+## [1.0.2.0] — 2026-05-06
+
+### Changed
+
+- **Home page product grid** now shows the top 8 products instead of the full catalog, keeping the landing page focused and fast to scroll.
+- **"See All Products" CTA** appears below the grid when more than 8 products exist, linking to the full product catalog at `/products` with search and status filters.
+- **Dead category filter removed** from the home page — the pill tabs (Supplements, Skincare, etc.) were decorative with no filtering logic; removed to avoid misleading users.
+- **`PRODUCT_PREVIEW_LIMIT` constant** introduced so the grid slice and the counter text (`Showing 8 of N`) stay in sync if the limit ever changes.
+- **`settings.local.json` untracked** — moved to `.gitignore` so accumulated session permissions are no longer committed to the shared repo.
+- **Skill routing rules** added to `CLAUDE.md` so Claude Code automatically invokes the right gstack skill (`/qa`, `/ship`, `/investigate`, etc.) for common development tasks.
+
 ## [1.0.1.0] — 2026-04-22
 
 ### Security (CSO Audit)
