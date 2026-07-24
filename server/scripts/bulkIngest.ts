@@ -13,6 +13,7 @@ import { OpenFoodFactsService } from "../services/openFoodFactsService";
 import { AIVettingService } from "../services/aiVettingService";
 import { SupabaseStorage } from "../storage/supabaseStorage";
 import { parseIngredients } from "../utils/ingredientParser";
+import type { ProductType } from "@shared/types";
 
 // How many products to target per run
 const TARGET_COUNT = 20;
@@ -106,10 +107,11 @@ async function run() {
         continue;
       }
 
-      console.log(`  Analyzing "${offProduct.name}" (${offProduct.brand}) — ${ingredients.length} ingredients`);
+      const productType: ProductType = offProduct.source === "food" ? "food" : "cosmetic";
+      console.log(`  Analyzing "${offProduct.name}" (${offProduct.brand}) [${productType}] — ${ingredients.length} ingredients`);
       let analyses;
       try {
-        analyses = await ai.analyzeIngredients(ingredients);
+        analyses = await ai.analyzeIngredients(ingredients, productType);
       } catch (e) {
         console.log(`  FAIL — AI error: ${e}`);
         failed++;
@@ -124,6 +126,7 @@ async function run() {
         const created = await storage.create({
           name: offProduct.name,
           brand: offProduct.brand,
+          productType,
           summary: `AI-vetted product. ${ingredients.length} ingredients analyzed from Open ${offProduct.source === "food" ? "Food" : "Beauty"} Facts (ODbL license).`,
           imageUrl: offProduct.imageUrl,
           status: shouldPublish ? "published" : "draft",
@@ -131,7 +134,9 @@ async function run() {
             name: a.name,
             status: a.status,
             rationale: a.rationale,
-            sourceUrl: a.sourceUrl || `https://www.ewg.org/skindeep/search/?query=${encodeURIComponent(a.name)}`,
+            sourceUrl: a.sourceUrl || (productType === "food"
+              ? `https://fdc.nal.usda.gov/food-search?query=${encodeURIComponent(a.name)}`
+              : `https://www.ewg.org/skindeep/search/?query=${encodeURIComponent(a.name)}`),
             isOverride: false,
           })),
         });

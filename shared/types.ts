@@ -1,5 +1,7 @@
 export type SafetyStatus = "safe" | "caution" | "banned";
 
+export type ProductType = "food" | "cosmetic" | "supplement" | "personal_care" | "unknown";
+
 export type ProductStatus = "draft" | "published";
 
 export interface Ingredient {
@@ -21,6 +23,7 @@ export interface Product {
   summary: string;
   imageUrl: string;
   status: ProductStatus;
+  productType: ProductType;
   overallStatus: SafetyStatus;
   createdAt: string;
   updatedAt: string;
@@ -31,6 +34,7 @@ export interface Product {
 
 export interface VetIngredientsRequest {
   ingredientsText: string;
+  productType?: ProductType;
 }
 
 export interface VetIngredientResult {

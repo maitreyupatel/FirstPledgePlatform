@@ -24,6 +24,11 @@ export function parseIngredients(rawText: string): string[] {
     rawText
       // Replace underscores (OFF language markup: _hazelnuts_ → hazelnuts)
       .replace(/_/g, " ")
+      // Preserve additive codes before stripping parentheticals — Indian labels
+      // write "Acidity Regulator (INS 296)" and the INS/E code must survive so
+      // the additive registry can resolve it. Unwraps code-only parens into
+      // plain text; all other parentheticals are stripped below as before.
+      .replace(/\(\s*((?:ins|e)[-\s]?\d{3,4}[a-z]?(?:\s*,\s*(?:ins|e)[-\s]?\d{3,4}[a-z]?)*)\s*\)/gi, " $1 ")
       // Strip parenthetical content BEFORE splitting — prevents (water, coffee) from splitting
       .replace(/\([^)]*\)/g, "")
       // Strip square bracket annotations e.g. [SOJA]
@@ -48,9 +53,22 @@ export function parseIngredients(rawText: string): string[] {
         clean = clean.replace(/^\d+[,\.]?\d*\s*%?\s*/, "");
         // Strip standalone trailing number that is a percentage without % sign
         // e.g. "cacao maigre 7" where original was "cacao maigre 7,4%" and comma split it
-        clean = clean.replace(/\s+\d+$/, "");
+        // — but never when the number is part of an additive code ("INS 296", "E 500")
+        if (!/\b(?:ins|e)[-\s]?\d{3,4}[a-z]?$/i.test(clean)) {
+          clean = clean.replace(/\s+\d+$/, "");
+        }
         // Strip trailing punctuation
         clean = clean.replace(/[.:;]+$/, "").trim();
+        // Strip unmatched trailing closers left by malformed label text
+        // e.g. "Microbial Rennet)" from "(cultures, Microbial Rennet)" split on comma
+        while (
+          (clean.endsWith(")") && !clean.includes("(")) ||
+          (clean.endsWith("]") && !clean.includes("["))
+        ) {
+          clean = clean.slice(0, -1).trim();
+        }
+        // Strip leading stray punctuation: "-Butylene Glycol", "'CONTAINS..."
+        clean = clean.replace(/^[\s\-–—.·'"`´]+/, "").trim();
         // Collapse multiple spaces
         clean = clean.replace(/\s{2,}/g, " ").trim();
         // Normalize ALL-CAPS words to title case for better readability and AI analysis
@@ -70,6 +88,9 @@ export function parseIngredients(rawText: string): string[] {
         if (s.length > 80) return false;
         // Reject if only digits/symbols
         if (/^[\d\s\W]+$/.test(s)) return false;
+        // Reject label disclaimers that are not ingredients:
+        // "Contains Milk", "May contain traces of nuts", "Allergy advice: ..."
+        if (/^(contains|may contain|allergen advice|allergy advice|free from|for allergens)\b/i.test(s)) return false;
         return true;
       })
   );

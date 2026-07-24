@@ -1,10 +1,18 @@
-import { boolean, pgEnum, pgTable, text, timestamp, uuid } from "drizzle-orm/pg-core";
+import { boolean, pgEnum, pgTable, text, timestamp, uuid, unique } from "drizzle-orm/pg-core";
 import { relations } from "drizzle-orm";
 
 export const safetyStatusEnum = pgEnum("safety_status_enum", [
   "safe",
   "caution",
   "banned",
+]);
+
+export const productTypeEnum = pgEnum("product_type_enum", [
+  "food",
+  "cosmetic",
+  "supplement",
+  "personal_care",
+  "unknown",
 ]);
 
 export const productStatusEnum = pgEnum("product_status_enum", [
@@ -20,6 +28,7 @@ export const products = pgTable("products", {
   imageUrl: text("image_url").notNull(),
   overallStatus: safetyStatusEnum("overall_status").notNull(),
   status: productStatusEnum("status").default("draft").notNull(),
+  productType: productTypeEnum("product_type").default("unknown").notNull(),
   publishedAt: timestamp("published_at", { withTimezone: true }),
   editedFromProductId: uuid("edited_from_product_id"),
   createdAt: timestamp("created_at", { withTimezone: true })

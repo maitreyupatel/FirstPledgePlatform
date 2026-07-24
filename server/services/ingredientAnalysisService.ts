@@ -1,9 +1,11 @@
 import { createClient } from "@supabase/supabase-js";
 import type { IngredientAnalysis } from "./aiVettingService";
+import type { ProductType } from "@shared/types";
 
 interface StoredAnalysis {
   id: string;
   ingredient_name: string;
+  product_type: string;
   status: "safe" | "caution" | "banned";
   rationale: string;
   description: string;
@@ -41,23 +43,36 @@ export class IngredientAnalysisService {
     this.refreshDays = refreshDays;
   }
 
-  /**
-   * Normalize ingredient name for consistent lookups
-   */
   normalizeIngredientName(name: string): string {
     return name.toLowerCase().trim();
   }
 
   /**
-   * Get existing analysis from permanent database storage
+   * Clamp EWG score to its documented 1-10 scale. Anything else (including 0,
+   * negatives, > 10, NaN) is stored as null rather than pretending a garbage
+   * value is a real score.
    */
-  async getAnalysis(ingredientName: string): Promise<IngredientAnalysis | null> {
+  static clampEwgScore(score: unknown): number | null {
+    if (typeof score !== "number" || !Number.isFinite(score)) return null;
+    const rounded = Math.round(score);
+    if (rounded < 1 || rounded > 10) return null;
+    return rounded;
+  }
+
+  /** Clamp confidence to [0, 1]; non-numeric input degrades to 0.5. */
+  static clampConfidence(confidence: unknown): number {
+    if (typeof confidence !== "number" || !Number.isFinite(confidence)) return 0.5;
+    return Math.min(1, Math.max(0, confidence));
+  }
+
+  async getAnalysis(ingredientName: string, productType: ProductType = "cosmetic"): Promise<IngredientAnalysis | null> {
     const normalizedName = this.normalizeIngredientName(ingredientName);
 
     const { data, error } = await this.supabase
       .from("ingredient_analyses")
       .select("*")
       .eq("ingredient_name", normalizedName)
+      .eq("product_type", productType)
       .single();
 
     if (error || !data) {
@@ -68,117 +83,109 @@ export class IngredientAnalysisService {
   }
 
   /**
-   * Check if analysis needs refresh
+   * Fetch cached analyses for a whole ingredient list in ONE query instead of
+   * one round-trip per ingredient. Returns a map keyed by normalized name.
+   * Fails open (empty map) so a lookup error degrades to fresh analysis.
    */
-  shouldRefreshAnalysis(analysis: IngredientAnalysis | null): boolean {
-    if (!analysis) {
-      return true;
+  async getAnalysesBatch(
+    ingredientNames: string[],
+    productType: ProductType = "cosmetic",
+  ): Promise<Map<string, IngredientAnalysis>> {
+    const result = new Map<string, IngredientAnalysis>();
+    const normalizedNames = Array.from(
+      new Set(ingredientNames.map((n) => this.normalizeIngredientName(n)).filter(Boolean)),
+    );
+    if (normalizedNames.length === 0) return result;
+
+    const { data, error } = await this.supabase
+      .from("ingredient_analyses")
+      .select("*")
+      .in("ingredient_name", normalizedNames)
+      .eq("product_type", productType);
+
+    if (error || !data) {
+      if (error) console.error("Batch analysis lookup failed:", error.message);
+      return result;
     }
 
-    // Check if analysis is older than refresh window
-    const lastAnalyzed = new Date((analysis as any).lastAnalyzedAt || (analysis as any).updatedAt);
+    for (const row of data as StoredAnalysis[]) {
+      result.set(row.ingredient_name, this.mapRowToAnalysis(row));
+    }
+    return result;
+  }
+
+  shouldRefreshAnalysis(analysis: IngredientAnalysis | null): boolean {
+    if (!analysis) return true;
+
+    const timestamp = (analysis as any).lastAnalyzedAt || (analysis as any).updatedAt;
+    // No timestamp means the analysis was computed in-memory this request —
+    // it is fresh by definition.
+    if (!timestamp) return false;
+
+    const lastAnalyzed = new Date(timestamp);
+    if (Number.isNaN(lastAnalyzed.getTime())) return true;
+
     const daysSinceAnalysis = (Date.now() - lastAnalyzed.getTime()) / (1000 * 60 * 60 * 24);
-    
     return daysSinceAnalysis > this.refreshDays;
   }
 
-  /**
-   * Save new analysis permanently
-   */
-  async saveAnalysis(
-    ingredientName: string,
-    analysis: IngredientAnalysis,
-  ): Promise<void> {
-    const normalizedName = this.normalizeIngredientName(ingredientName);
-    const now = new Date().toISOString();
-
-    const { error } = await this.supabase
-      .from("ingredient_analyses")
-      .insert({
-        ingredient_name: normalizedName,
-        status: analysis.status,
-        rationale: analysis.rationale,
-        description: analysis.description,
-        edge_cases: analysis.edgeCases,
-        source_url: analysis.sourceUrl,
-        ewg_score: analysis.ewgScore ?? null,
-        ewg_data_availability: null, // Can be added if needed
-        research_sources: analysis.researchSources || null,
-        suggested_matches: analysis.suggestedMatches ?? null,
-        confidence: analysis.confidence,
-        analysis_version: 1,
-        last_analyzed_at: now,
-      });
-
-    if (error) {
-      console.error(`Error saving analysis for ${ingredientName}:`, error);
-      throw new Error(`Failed to save analysis: ${error.message}`);
-    }
+  /** Build the DB row shared by all write paths, with bounds enforced. */
+  private buildAnalysisRow(analysis: IngredientAnalysis) {
+    return {
+      status: analysis.status,
+      rationale: analysis.rationale,
+      description: analysis.description,
+      edge_cases: analysis.edgeCases,
+      source_url: analysis.sourceUrl,
+      ewg_score: IngredientAnalysisService.clampEwgScore(analysis.ewgScore),
+      ewg_data_availability: null,
+      research_sources: analysis.researchSources || null,
+      suggested_matches: analysis.suggestedMatches ?? null,
+      confidence: IngredientAnalysisService.clampConfidence(analysis.confidence),
+      last_analyzed_at: new Date().toISOString(),
+    };
   }
 
   /**
-   * Update existing analysis (increment version, preserve history)
+   * Atomic write keyed on the (ingredient_name, product_type) unique
+   * constraint. Replaces the previous get-then-insert/update sequence, which
+   * raced under concurrent analyses of the same ingredient (duplicate-key
+   * errors or lost writes on serverless).
    */
-  async updateAnalysis(
+  async upsertAnalysis(
     ingredientName: string,
+    productType: ProductType,
     analysis: IngredientAnalysis,
   ): Promise<void> {
     const normalizedName = this.normalizeIngredientName(ingredientName);
-    const now = new Date().toISOString();
 
-    // Get current version
+    // Best-effort version increment; concurrent writers may compute the same
+    // version, which is acceptable — the upsert itself is atomic.
     const { data: existing } = await this.supabase
       .from("ingredient_analyses")
       .select("analysis_version")
       .eq("ingredient_name", normalizedName)
-      .single();
-
-    const newVersion = existing ? existing.analysis_version + 1 : 1;
+      .eq("product_type", productType)
+      .maybeSingle();
 
     const { error } = await this.supabase
       .from("ingredient_analyses")
-      .update({
-        status: analysis.status,
-        rationale: analysis.rationale,
-        description: analysis.description,
-        edge_cases: analysis.edgeCases,
-        source_url: analysis.sourceUrl,
-        ewg_score: analysis.ewgScore ?? null,
-        ewg_data_availability: null,
-        research_sources: analysis.researchSources || null,
-        suggested_matches: analysis.suggestedMatches ?? null,
-        confidence: analysis.confidence,
-        analysis_version: newVersion,
-        last_analyzed_at: now,
-        // updated_at is set automatically by trigger
-      })
-      .eq("ingredient_name", normalizedName);
+      .upsert(
+        {
+          ingredient_name: normalizedName,
+          product_type: productType,
+          analysis_version: existing ? existing.analysis_version + 1 : 1,
+          ...this.buildAnalysisRow(analysis),
+        },
+        { onConflict: "ingredient_name,product_type" },
+      );
 
     if (error) {
-      console.error(`Error updating analysis for ${ingredientName}:`, error);
-      throw new Error(`Failed to update analysis: ${error.message}`);
+      console.error(`Error upserting analysis for ${ingredientName} (${productType}):`, error);
+      throw new Error(`Failed to upsert analysis: ${error.message}`);
     }
   }
 
-  /**
-   * Upsert analysis (save if new, update if exists)
-   */
-  async upsertAnalysis(
-    ingredientName: string,
-    analysis: IngredientAnalysis,
-  ): Promise<void> {
-    const existing = await this.getAnalysis(ingredientName);
-    
-    if (existing) {
-      await this.updateAnalysis(ingredientName, analysis);
-    } else {
-      await this.saveAnalysis(ingredientName, analysis);
-    }
-  }
-
-  /**
-   * Map database row to IngredientAnalysis
-   */
   private mapRowToAnalysis(row: StoredAnalysis): IngredientAnalysis {
     return {
       name: row.ingredient_name,
@@ -189,12 +196,11 @@ export class IngredientAnalysisService {
       sourceUrl: row.source_url,
       confidence: row.confidence,
       ewgScore: row.ewg_score,
+      productType: row.product_type as ProductType,
       researchSources: row.research_sources || undefined,
       suggestedMatches: row.suggested_matches ?? undefined,
-      // Include metadata for refresh checking
       lastAnalyzedAt: row.last_analyzed_at,
       updatedAt: row.updated_at,
     } as IngredientAnalysis & { lastAnalyzedAt?: string; updatedAt?: string };
   }
 }
-

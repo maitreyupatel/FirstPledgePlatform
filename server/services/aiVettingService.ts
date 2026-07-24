@@ -1,30 +1,35 @@
-import { SafetyStatus } from "@shared/types";
+import { SafetyStatus, ProductType } from "@shared/types";
 import { EWGService, EWGIngredientData } from "./ewgService";
 import { ResearchService, ResearchResult } from "./researchService";
 import { IngredientAnalysisService } from "./ingredientAnalysisService";
+import { FoodSafetyService, FoodSafetyData } from "./foodSafetyService";
 import type { AIProvider } from "./aiProvider";
 import { GeminiProvider } from "./providers/geminiProvider";
 import { OpenAIProvider } from "./providers/openaiProvider";
 import { GroqProvider } from "./providers/groqProvider";
+import { CompoundResearchService } from "./providers/compoundResearchService";
 
 export interface IngredientAnalysis {
   name: string;
   status: SafetyStatus;
   rationale: string;
-  description: string; // 3-line description
-  edgeCases: string; // One-liner edge cases
+  description: string;
+  edgeCases: string;
   sourceUrl: string;
   confidence: number;
   ewgScore?: number | null;
+  productType?: ProductType;
   researchSources?: ResearchResult[];
-  suggestedMatches?: string[]; // For misspellings
+  suggestedMatches?: string[];
 }
 
 export class AIVettingService {
   private aiProvider: AIProvider | null = null;
   private ewgService: EWGService;
+  private foodSafetyService: FoodSafetyService;
   private researchService?: ResearchService;
   private analysisService?: IngredientAnalysisService;
+  private compoundService?: CompoundResearchService;
   private providerType: string;
 
   constructor(
@@ -35,8 +40,7 @@ export class AIVettingService {
     useAnalysisStorage: boolean = true
   ) {
     this.providerType = providerType;
-    
-    // Initialize AI provider based on type
+
     if (apiKey) {
       try {
         switch (providerType) {
@@ -60,18 +64,33 @@ export class AIVettingService {
     } else {
       console.warn(`⚠️  No API key provided for ${providerType}. AI analysis disabled.`);
     }
-    
+
     this.ewgService = new EWGService();
+
+    // Search-grounded analysis + verification via Groq Compound (same key).
+    // Used for ingredients unknown to EWG/the additive registry, and as a
+    // second opinion on banned/low-confidence verdicts.
+    if (providerType === "groq" && apiKey && CompoundResearchService.isEnabled()) {
+      this.compoundService = new CompoundResearchService(apiKey);
+      console.log("✅ Compound research enabled (search-grounded analysis, FSSAI-pinned)");
+    }
+
+    // When Compound handles research, keep FoodSafetyService registry-only —
+    // its internal Google CSE fallback is redundant there and sits outside
+    // the ResearchService quota tracker.
+    this.foodSafetyService = this.compoundService
+      ? new FoodSafetyService()
+      : new FoodSafetyService(googleApiKey, googleCxId);
+
     if (googleApiKey && googleCxId) {
       this.researchService = new ResearchService(googleApiKey, googleCxId);
     }
-    
-    // Initialize ingredient analysis storage if enabled
+
     if (useAnalysisStorage) {
       try {
         const supabaseUrl = process.env.SUPABASE_URL;
         const supabaseServiceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
-        
+
         if (!supabaseUrl || !supabaseServiceRoleKey) {
           console.warn("⚠️  Ingredient analysis storage disabled: Supabase credentials not configured");
         } else {
@@ -85,56 +104,225 @@ export class AIVettingService {
     }
   }
 
-  async analyzeIngredient(ingredientName: string): Promise<IngredientAnalysis> {
-    // Step 0: Check permanent storage first
+  // Coalesces concurrent analyses of the same (ingredient, productType) so
+  // parallel requests share one AI call and one DB write instead of racing.
+  private inFlight = new Map<string, Promise<IngredientAnalysis>>();
+
+  private analysisKey(ingredientName: string, productType: ProductType): string {
+    return `${ingredientName.toLowerCase().trim()}|${productType}`;
+  }
+
+  async analyzeIngredient(ingredientName: string, productType: ProductType = "cosmetic"): Promise<IngredientAnalysis> {
+    // Step 0: Check permanent storage (cache key is ingredient_name + product_type)
     if (this.analysisService) {
-      const storedAnalysis = await this.analysisService.getAnalysis(ingredientName);
+      const storedAnalysis = await this.analysisService.getAnalysis(ingredientName, productType);
       if (storedAnalysis && !this.analysisService.shouldRefreshAnalysis(storedAnalysis)) {
-        console.debug(`Using stored analysis for "${ingredientName}"`);
+        console.debug(`Using stored analysis for "${ingredientName}" (${productType})`);
         return storedAnalysis;
       }
     }
 
-    // Step 1: Check EWG first
+    return this.analyzeFresh(ingredientName, productType);
+  }
+
+  /**
+   * Run a fresh (non-cached) analysis. Identical concurrent calls are
+   * deduplicated: the second caller awaits the first caller's promise.
+   */
+  private analyzeFresh(ingredientName: string, productType: ProductType): Promise<IngredientAnalysis> {
+    const key = this.analysisKey(ingredientName, productType);
+    const pending = this.inFlight.get(key);
+    if (pending) {
+      console.debug(`Coalescing concurrent analysis for "${ingredientName}" (${productType})`);
+      return pending;
+    }
+
+    const isFoodContext = productType === "food" || productType === "supplement";
+
+    if (productType === "unknown") {
+      console.warn(`[aiVettingService] product_type="unknown" for "${ingredientName}" — falling back to cosmetic pipeline. Consider re-classifying this product.`);
+    }
+
+    const promise = (isFoodContext
+      ? this.analyzeFoodIngredient(ingredientName, productType)
+      : this.analyzeCosmeticIngredient(ingredientName, productType)
+    ).finally(() => this.inFlight.delete(key));
+
+    this.inFlight.set(key, promise);
+    return promise;
+  }
+
+  // Food / supplement pipeline: FoodSafetyService → food-targeted research → AI with food prompt
+  private async analyzeFoodIngredient(ingredientName: string, productType: ProductType): Promise<IngredientAnalysis> {
+    // Step 1: E-number/INS lookup or regulatory database search
+    const foodData = await this.foodSafetyService.lookupFoodIngredient(ingredientName);
+
+    // Grounded path: no authoritative registry status → one search-grounded
+    // Compound call (FSSAI-pinned) replaces the research + blind-AI two-step.
+    // Falls through to the standard path on any failure. Gated on the STATUS,
+    // not just `found` — a research hit without a status is context, not
+    // authority.
+    if (!foodData.status && this.compoundService) {
+      try {
+        const grounded = await this.compoundService.analyzeWithSearch(ingredientName, productType);
+        let result: IngredientAnalysis = {
+          name: ingredientName,
+          status: grounded.status,
+          rationale: grounded.rationale,
+          description: grounded.description,
+          edgeCases: grounded.edgeCases,
+          sourceUrl: `https://fdc.nal.usda.gov/food-search?query=${encodeURIComponent(ingredientName)}`,
+          confidence: grounded.confidence,
+          ewgScore: null,
+          productType,
+        };
+        // Grounded verdicts still pass the banned/low-confidence gate — one
+        // more independent sample before anything alarming can publish.
+        result = await this.applyVerification(result);
+        await this.cacheResult(ingredientName, productType, result);
+        return result;
+      } catch (error) {
+        console.warn(`Compound research failed for "${ingredientName}" — using standard path:`, error instanceof Error ? error.message : error);
+      }
+    }
+
+    // Step 2: Research fallback (FSSAI/FDA/PubMed targeted) — only if food service found nothing
+    let researchSources: ResearchResult[] = [];
+    if (!foodData.found && this.researchService) {
+      console.debug(`Food safety data unavailable for "${ingredientName}", searching regulatory sources...`);
+      researchSources = await this.researchService.searchIngredient(ingredientName, "food");
+    }
+
+    // Ground additive chemistry: when the registry identified this additive
+    // (e.g. INS 296 = Malic Acid), pass the verified identity into the AI
+    // prompt as an authoritative source so the model never guesses what an
+    // INS/E-number is. (Evidence: ungrounded models misidentify INS numbers.)
+    if (foodData.found && foodData.name) {
+      researchSources = [
+        {
+          source: "fda",
+          url: foodData.url,
+          title: `VERIFIED ADDITIVE IDENTITY: "${ingredientName}" is ${foodData.name}. Do not reinterpret this identity.`,
+          snippet: foodData.regulatoryNotes || "",
+          relevance: 1,
+        },
+        ...researchSources,
+      ];
+    }
+
+    // Step 3: AI analysis with food-specific prompt
+    let aiAnalysis: Partial<IngredientAnalysis> = {};
+    if (this.aiProvider) {
+      try {
+        aiAnalysis = await this.aiProvider.analyzeIngredient(
+          ingredientName,
+          { found: false, score: null, concerns: [] }, // EWG data not relevant for food
+          researchSources,
+          productType
+        );
+      } catch (error) {
+        console.error(`Error analyzing food ingredient ${ingredientName}:`, error);
+      }
+    }
+
+    // Step 4: Combine results — E-number/regulatory data takes precedence over AI status
+    const finalStatus: SafetyStatus = foodData.status || aiAnalysis.status || "caution";
+    const sourceUrl = foodData.url || `https://fdc.nal.usda.gov/food-search?query=${encodeURIComponent(ingredientName)}`;
+
+    let result: IngredientAnalysis = {
+      name: ingredientName,
+      status: finalStatus,
+      rationale: aiAnalysis.rationale || this.buildFoodRationale(ingredientName, foodData, finalStatus),
+      description: aiAnalysis.description || this.buildFoodDescription(ingredientName, finalStatus),
+      edgeCases: aiAnalysis.edgeCases || (foodData.concerns.length > 0 ? foodData.concerns.join("; ") : "No specific concerns at normal dietary levels."),
+      sourceUrl,
+      // 0.85 only for an authoritative registry status; a research hit
+      // without a status must not inflate a blind AI verdict past the
+      // publish (0.7) and verification (0.6) gates.
+      confidence: foodData.status ? 0.85 : (aiAnalysis.confidence || 0.5),
+      ewgScore: null, // EWG score is not applicable for food ingredients
+      productType,
+      researchSources: researchSources.length > 0 ? researchSources : undefined,
+    };
+
+    // Verification gate applies only to AI-derived verdicts (registry status
+    // is authoritative and skips it)
+    if (!foodData.status) {
+      result = await this.applyVerification(result);
+    }
+
+    // Step 5: Cache result with (ingredient_name, product_type) composite key
+    await this.cacheResult(ingredientName, productType, result);
+    return result;
+  }
+
+  // Cosmetic / personal_care / unknown pipeline: EWG → research → AI with cosmetic prompt
+  private async analyzeCosmeticIngredient(ingredientName: string, productType: ProductType): Promise<IngredientAnalysis> {
+    // Step 1: EWG Skin Deep
     const ewgData = await this.ewgService.searchIngredient(ingredientName);
-    
-    // If EWG has a score, use it to determine status
+
     let status: SafetyStatus | null = null;
     if (ewgData.score !== null) {
       status = EWGService.getStatusFromScore(ewgData.score) || null;
     }
 
-    // Step 2: Only search research sources if EWG data is unavailable (not found or no score)
-    // This significantly reduces Google API calls - only used as fallback when EWG fails
-    let researchSources: ResearchResult[] = [];
     const ewgDataUnavailable = !ewgData.found || ewgData.score === null;
-    
+
+    // Grounded path: unknown to EWG → one search-grounded Compound call
+    // replaces the research + blind-AI two-step. Falls through on failure.
+    if (ewgDataUnavailable && this.compoundService) {
+      try {
+        const grounded = await this.compoundService.analyzeWithSearch(ingredientName, productType);
+        let result: IngredientAnalysis = {
+          name: ingredientName,
+          status: grounded.status,
+          rationale: grounded.rationale,
+          description: grounded.description,
+          edgeCases: grounded.edgeCases,
+          sourceUrl: ewgData.url,
+          confidence: grounded.confidence,
+          ewgScore: ewgData.score,
+          productType,
+          suggestedMatches: ewgData.suggestedMatches,
+        };
+        // Grounded verdicts still pass the banned/low-confidence gate
+        result = await this.applyVerification(result);
+        await this.cacheResult(ingredientName, productType, result);
+        return result;
+      } catch (error) {
+        console.warn(`Compound research failed for "${ingredientName}" — using standard path:`, error instanceof Error ? error.message : error);
+      }
+    }
+
+    // Step 2: Research fallback — only when EWG has no data
+    let researchSources: ResearchResult[] = [];
+
     if (ewgDataUnavailable && this.researchService) {
       console.debug(`EWG data unavailable for "${ingredientName}", searching research sources...`);
       researchSources = await this.researchService.searchIngredient(ingredientName);
     } else if (ewgData.found && ewgData.score !== null) {
-      console.debug(`EWG data available for "${ingredientName}" (score: ${ewgData.score}), skipping research search to save API quota.`);
+      console.debug(`EWG data available for "${ingredientName}" (score: ${ewgData.score}), skipping research to save API quota.`);
     }
 
-    // Step 3: Generate AI analysis (provider handles retries internally)
+    // Step 3: AI analysis with cosmetic prompt
     let aiAnalysis: Partial<IngredientAnalysis> = {};
     if (this.aiProvider) {
       try {
         aiAnalysis = await this.aiProvider.analyzeIngredient(
           ingredientName,
           ewgData,
-          researchSources
+          researchSources,
+          productType
         );
       } catch (error) {
-        console.error(`Error analyzing ingredient ${ingredientName} with ${this.providerType}:`, error);
+        console.error(`Error analyzing cosmetic ingredient ${ingredientName} with ${this.providerType}:`, error);
       }
     }
 
-    // Step 4: Combine EWG data with AI analysis
-    // Prefer EWG status if available, otherwise use AI status
-    const finalStatus = status || aiAnalysis.status || "caution";
+    // Step 4: Prefer EWG status if available
+    const finalStatus: SafetyStatus = status || aiAnalysis.status || "caution";
 
-    const result: IngredientAnalysis = {
+    let result: IngredientAnalysis = {
       name: ingredientName,
       status: finalStatus,
       rationale: aiAnalysis.rationale || this.buildRationaleFromEWG(ewgData, finalStatus),
@@ -143,188 +331,238 @@ export class AIVettingService {
       sourceUrl: ewgData.url,
       confidence: ewgData.found ? 0.9 : (aiAnalysis.confidence || 0.5),
       ewgScore: ewgData.score,
+      productType,
       researchSources: researchSources.length > 0 ? researchSources : undefined,
       suggestedMatches: ewgData.suggestedMatches,
     };
 
-    // Step 5: Save analysis permanently to database
-    if (this.analysisService) {
-      try {
-        await this.analysisService.upsertAnalysis(ingredientName, result);
-        console.debug(`Saved analysis for "${ingredientName}" to permanent storage`);
-      } catch (error) {
-        console.error(`Failed to save analysis for "${ingredientName}":`, error);
-        // Continue even if save fails
-      }
+    // Verification gate applies only to AI-derived verdicts (an EWG-derived
+    // status is authoritative and skips it)
+    if (!status) {
+      result = await this.applyVerification(result);
     }
 
+    // Step 5: Cache result
+    await this.cacheResult(ingredientName, productType, result);
     return result;
   }
 
-  // Note: Retry logic is now handled by individual AI provider implementations
-  // The analyzeWithRetry method has been removed as it referenced non-existent properties
-  // and is no longer used in the current implementation
+  /**
+   * Batch path: enrich each uncached ingredient with local authoritative data
+   * (additive registry for food, EWG for cosmetic), analyze all of them in one
+   * provider call, apply the same status-precedence and verification rules as
+   * the sequential path, cache, and return a map keyed by normalized name.
+   * Throws on any failure — the caller falls back to sequential analysis.
+   */
+  private async analyzeUncachedBatch(names: string[], productType: ProductType): Promise<Map<string, IngredientAnalysis>> {
+    const provider = this.aiProvider;
+    if (!(provider instanceof GroqProvider)) throw new Error("Batch analysis requires the Groq provider");
+    const isFood = productType === "food" || productType === "supplement";
+
+    const items: Array<{ name: string; context?: string; foodData?: FoodSafetyData; ewgData?: EWGIngredientData }> = [];
+    for (const name of names) {
+      if (isFood) {
+        const foodData = await this.foodSafetyService.lookupFoodIngredient(name);
+        items.push({
+          name,
+          foodData,
+          context: foodData.found && foodData.name
+            ? `Verified additive identity: ${foodData.name}. ${foodData.regulatoryNotes ?? ""}`
+            : undefined,
+        });
+      } else {
+        const ewgData = await this.ewgService.searchIngredient(name);
+        items.push({
+          name,
+          ewgData,
+          context: ewgData.found && ewgData.score !== null ? `EWG Skin Deep score: ${ewgData.score}/10` : undefined,
+        });
+      }
+    }
+
+    const analyses = await provider.analyzeIngredientsBatch(
+      items.map(({ name, context }) => ({ name, context })),
+      productType
+    );
+
+    const map = new Map<string, IngredientAnalysis>();
+    for (let i = 0; i < items.length; i++) {
+      const item = items[i];
+      const a = analyses[i];
+      const authoritativeStatus: SafetyStatus | null = isFood
+        ? item.foodData?.status ?? null
+        : item.ewgData && item.ewgData.score !== null
+          ? EWGService.getStatusFromScore(item.ewgData.score) || null
+          : null;
+
+      let result: IngredientAnalysis = {
+        name: item.name,
+        status: authoritativeStatus || a.status,
+        rationale: a.rationale,
+        description: a.description,
+        edgeCases: a.edgeCases,
+        sourceUrl: isFood
+          ? item.foodData?.url || `https://fdc.nal.usda.gov/food-search?query=${encodeURIComponent(item.name)}`
+          : item.ewgData?.url ?? "",
+        confidence: authoritativeStatus ? 0.85 : a.confidence,
+        ewgScore: isFood ? null : item.ewgData?.score ?? null,
+        productType,
+      };
+
+      if (!authoritativeStatus) {
+        result = await this.applyVerification(result);
+      }
+      await this.cacheResult(item.name, productType, result);
+
+      const key = this.analysisService
+        ? this.analysisService.normalizeIngredientName(item.name)
+        : item.name.toLowerCase().trim();
+      map.set(key, result);
+    }
+    return map;
+  }
+
+  /** Persist an analysis to the shared cache; failures are logged, not fatal. */
+  private async cacheResult(ingredientName: string, productType: ProductType, result: IngredientAnalysis): Promise<void> {
+    if (!this.analysisService) return;
+    try {
+      await this.analysisService.upsertAnalysis(ingredientName, productType, result);
+      console.debug(`Saved analysis for "${ingredientName}" (${productType})`);
+    } catch (error) {
+      console.error(`Failed to save analysis for "${ingredientName}":`, error);
+    }
+  }
 
   /**
-   * Sleep utility for delays between requests
+   * Second-opinion gate: fresh AI-derived verdicts that are "banned" or
+   * low-confidence get one independent search-grounded review before they
+   * can be cached or published. Agreement raises confidence; disagreement
+   * takes the more severe status, caps confidence below the publish gate,
+   * and flags the ingredient for manual review.
    */
+  private async applyVerification(result: IngredientAnalysis): Promise<IngredientAnalysis> {
+    if (!this.compoundService) return result;
+    if (result.status !== "banned" && result.confidence >= 0.6) return result;
+
+    try {
+      const second = await this.compoundService.analyzeWithSearch(result.name, result.productType ?? "cosmetic");
+
+      if (second.status === result.status) {
+        return { ...result, confidence: Math.max(result.confidence, Math.min(second.confidence, 0.9)) };
+      }
+
+      const severity: Record<SafetyStatus, number> = { safe: 0, caution: 1, banned: 2 };
+      const conservative = severity[second.status] > severity[result.status] ? second.status : result.status;
+      console.warn(`Verification disagreement for "${result.name}": primary=${result.status}, grounded=${second.status} → keeping "${conservative}"`);
+      return {
+        ...result,
+        status: conservative,
+        confidence: Math.min(result.confidence, second.confidence, 0.5),
+        edgeCases: `${result.edgeCases} [Independent search-grounded review returned "${second.status}" — flagged for manual review.]`.trim(),
+      };
+    } catch (error) {
+      console.warn(`Verification pass failed for "${result.name}" — keeping primary verdict:`, error instanceof Error ? error.message : error);
+      return result;
+    }
+  }
+
   private sleep(ms: number): Promise<void> {
     return new Promise(resolve => setTimeout(resolve, ms));
   }
 
-  async analyzeIngredients(ingredientNames: string[]): Promise<IngredientAnalysis[]> {
+  // Delay between fresh AI calls. Groq's free tier is bound by tokens/minute
+  // (8K TPM for gpt-oss-120b), not just requests/minute: at ~1.3K tokens per
+  // analysis, sustained throughput is ~5 calls/min. The 2s default relies on
+  // the bounded 429 retry to absorb bursts; set AI_CALL_DELAY_MS=10000 for
+  // long bulk runs that must stay under the free-tier TPM ceiling.
+  private readonly callDelayMs = (() => {
+    const configured = parseInt(process.env.AI_CALL_DELAY_MS ?? "2000", 10);
+    return Number.isFinite(configured) && configured >= 0 ? configured : 2000;
+  })();
+
+  async analyzeIngredients(ingredientNames: string[], productType: ProductType = "cosmetic"): Promise<IngredientAnalysis[]> {
     if (ingredientNames.length === 0) return [];
+
+    // One batched cache lookup for the entire list. Previously this was two
+    // queries PER ingredient (one here, one inside analyzeIngredient) — a
+    // 20-ingredient product cost 40 round-trips before any AI call.
+    let cached = new Map<string, IngredientAnalysis>();
+    if (this.analysisService) {
+      try {
+        cached = await this.analysisService.getAnalysesBatch(ingredientNames, productType);
+      } catch (error) {
+        console.warn("Batch cache lookup failed — falling back to fresh analysis:", error);
+      }
+    }
+
+    // Experimental single-call batching (BATCH_ANALYSIS=true): analyze all
+    // uncached ingredients in ONE model call, removing per-ingredient pacing
+    // delays. Falls back to the sequential loop on any failure.
+    if (process.env.BATCH_ANALYSIS === "true" && this.aiProvider instanceof GroqProvider) {
+      const keyOf = (n: string) =>
+        this.analysisService ? this.analysisService.normalizeIngredientName(n) : n.toLowerCase().trim();
+      const seen = new Set<string>();
+      const uncachedNames = ingredientNames.filter((n) => {
+        const k = keyOf(n);
+        if (seen.has(k)) return false;
+        seen.add(k);
+        const hit = cached.get(k);
+        return !(hit && (!this.analysisService || !this.analysisService.shouldRefreshAnalysis(hit)));
+      });
+
+      if (uncachedNames.length >= 4 && uncachedNames.length <= 12) {
+        try {
+          const fresh = await this.analyzeUncachedBatch(uncachedNames, productType);
+          fresh.forEach((analysis, key) => cached.set(key, analysis));
+          console.log(`✅ Batch-analyzed ${fresh.size} ingredients in one call`);
+        } catch (error) {
+          console.warn("Batch analysis failed — falling back to sequential:", error instanceof Error ? error.message : error);
+        }
+      }
+    }
 
     const analyses: IngredientAnalysis[] = [];
 
     for (let i = 0; i < ingredientNames.length; i++) {
       const name = ingredientNames[i];
+      const cacheKey = this.analysisService
+        ? this.analysisService.normalizeIngredientName(name)
+        : name.toLowerCase().trim();
 
-      // Check cache before calling analyzeIngredient so we know whether
-      // a Groq API call will be made — cached hits need no rate-limit delay
-      let isCacheHit = false;
-      if (this.analysisService) {
-        try {
-          const cached = await this.analysisService.getAnalysis(name);
-          isCacheHit = !!(cached && !this.analysisService.shouldRefreshAnalysis(cached));
-        } catch { /* ignore */ }
+      const hit = cached.get(cacheKey);
+      const isCacheHit = !!(hit && (!this.analysisService || !this.analysisService.shouldRefreshAnalysis(hit)));
+
+      let analysis: IngredientAnalysis;
+      if (isCacheHit) {
+        analysis = hit!;
+      } else {
+        analysis = await this.analyzeFresh(name, productType);
+        // Duplicate names later in the list reuse this result instead of
+        // paying for a second AI call.
+        cached.set(cacheKey, analysis);
       }
-
-      const analysis = await this.analyzeIngredient(name);
       analyses.push(analysis);
 
-      // Only delay when a fresh Groq API call was made (not on cache hits).
-      // Groq free tier: 30 req/min → 2s between requests is safe.
+      // Pace fresh API calls for the provider's rate limits (see callDelayMs).
       // Cache hits are instant and don't consume rate-limit quota.
       const isLast = i === ingredientNames.length - 1;
       if (!isCacheHit && !isLast) {
-        await this.sleep(2000);
+        await this.sleep(this.callDelayMs);
       }
     }
 
     return analyses;
   }
 
-  private buildPrompt(
-    ingredientName: string,
-    ewgData: EWGIngredientData,
-    researchSources: ResearchResult[]
-  ): string {
-    let ewgContext = "";
-    if (ewgData.found && ewgData.score !== null) {
-      ewgContext = `\nEWG Skin Deep Score: ${ewgData.score}/10 (Data Availability: ${ewgData.dataAvailability || "Unknown"})`;
-      if (ewgData.concerns.length > 0) {
-        ewgContext += `\nEWG Concerns: ${ewgData.concerns.join(", ")}`;
-      }
-    } else {
-      ewgContext = "\nEWG Skin Deep: Not found or score unavailable";
-      if (ewgData.suggestedMatches && ewgData.suggestedMatches.length > 0) {
-        ewgContext += `\nSuggested similar ingredients: ${ewgData.suggestedMatches.join(", ")}`;
-      }
+  private buildFoodRationale(ingredientName: string, foodData: any, status: SafetyStatus): string {
+    if (foodData.found && foodData.regulatoryNotes) {
+      return `${ingredientName} — ${foodData.regulatoryNotes}${foodData.concerns.length > 0 ? ` Concerns: ${foodData.concerns.join("; ")}.` : ""}`;
     }
-
-    let researchContext = "";
-    if (researchSources.length > 0) {
-      researchContext = "\nAdditional Research Sources Found:\n";
-      researchSources.forEach(source => {
-        researchContext += `- ${source.source.toUpperCase()}: ${source.title} (${source.url})\n`;
-      });
-    }
-
-    return `You are a cosmetic ingredient safety researcher. Analyze the safety of this ingredient: "${ingredientName}"
-
-${ewgContext}
-${researchContext}
-
-Provide your analysis in JSON format:
-{
-  "status": "safe" | "caution" | "banned",
-  "rationale": "Detailed explanation based on scientific evidence. Be specific about why this ingredient received this rating. Include information about known health concerns, regulatory status, and scientific research findings.",
-  "description": "A concise 3-line description of the ingredient. First line: What it is and its primary use. Second line: Safety profile and key characteristics. Third line: Common applications in cosmetics.",
-  "edgeCases": "A one-line statement mentioning any edge cases, special considerations, or specific conditions where this ingredient should be used with extra caution (e.g., 'May cause irritation in sensitive skin' or 'Avoid during pregnancy' or 'None known').",
-  "confidence": 0.0-1.0
-}
-
-Guidelines:
-- "safe": Generally recognized as safe, low risk, well-studied with no major concerns (EWG score 1-4)
-- "caution": Mixed evidence, potential concerns at high concentrations, needs careful consideration (EWG score 5-7)
-- "banned": Known health risks, regulatory restrictions, or significant safety concerns (EWG score 8-10)
-
-If EWG score is provided, use it as the primary basis for status determination:
-- Score 1-4 → "safe"
-- Score 5-7 → "caution"  
-- Score 8-10 → "banned"
-
-The description must be exactly 3 lines, each line being a complete sentence.
-The edgeCases must be a single concise line.
-
-Be specific and evidence-based. The rationale should be unique to this ingredient, not generic.`;
+    return `${ingredientName} food safety assessment based on available regulatory data. Status: ${status}. Manual review with FDA/EFSA databases recommended for complete assessment.`;
   }
 
-  private parseAIResponse(ingredientName: string, text: string): Partial<IngredientAnalysis> {
-    // Extract JSON from markdown code blocks if present
-    let jsonText = text.trim();
-    
-    // Remove markdown code fences
-    jsonText = jsonText.replace(/```json\n?/g, "").replace(/```\n?/g, "");
-    
-    // Try to find JSON object
-    const jsonMatch = jsonText.match(/\{[\s\S]*\}/);
-    if (jsonMatch) {
-      jsonText = jsonMatch[0];
-    }
-
-    try {
-      const parsed = JSON.parse(jsonText);
-      
-      // Validate and normalize status
-      let status: SafetyStatus = "caution";
-      if (parsed.status === "safe" || parsed.status === "caution" || parsed.status === "banned") {
-        status = parsed.status;
-      }
-
-      // Ensure rationale exists and is meaningful
-      let rationale = parsed.rationale || parsed.analysis || parsed.explanation || "";
-      if (!rationale || rationale.length < 20) {
-        rationale = `${ingredientName} requires further research. ${parsed.rationale || "Manual review recommended."}`;
-      }
-
-      // Parse description (should be 3 lines)
-      let description = parsed.description || "";
-      if (description) {
-        // Ensure it's formatted as 3 lines
-        const lines = description.split('\n').filter((line: string) => line.trim()).slice(0, 3);
-        if (lines.length < 3) {
-          // Pad with default lines if needed
-          while (lines.length < 3) {
-            lines.push(`${ingredientName} is commonly used in cosmetic formulations.`);
-          }
-        }
-        description = lines.join('\n');
-      }
-
-      // Parse edge cases (should be one line)
-      let edgeCases = parsed.edgeCases || parsed.edgeCase || "";
-      if (!edgeCases || edgeCases.trim().length === 0) {
-        edgeCases = "No specific edge cases known. Use as directed.";
-      }
-
-      const confidence = typeof parsed.confidence === "number" 
-        ? Math.max(0, Math.min(1, parsed.confidence))
-        : 0.7;
-
-      return {
-        status,
-        rationale: rationale.trim(),
-        description: description.trim(),
-        edgeCases: edgeCases.trim(),
-        confidence
-      };
-    } catch (error) {
-      console.error(`Failed to parse AI response for ${ingredientName}:`, error);
-      console.error("Raw response:", text.substring(0, 500));
-      return {};
-    }
+  private buildFoodDescription(ingredientName: string, status: SafetyStatus): string {
+    return `${ingredientName} is a food ingredient used in processed and packaged food products.\nFood safety assessment indicates ${status} status based on FDA/EFSA regulatory data.\nConsult current regulatory guidelines for specific use limits and applications.`;
   }
 
   private buildRationaleFromEWG(ewgData: EWGIngredientData, status: SafetyStatus): string {
@@ -339,13 +577,8 @@ Be specific and evidence-based. The rationale should be unique to this ingredien
   }
 
   private buildDefaultEdgeCases(ingredientName: string, status: SafetyStatus): string {
-    if (status === "banned") {
-      return "This ingredient should be avoided due to safety concerns.";
-    }
-    if (status === "caution") {
-      return "Use with caution. May cause irritation in sensitive individuals.";
-    }
+    if (status === "banned") return "This ingredient should be avoided due to safety concerns.";
+    if (status === "caution") return "Use with caution. May cause irritation in sensitive individuals.";
     return "No specific edge cases known. Use as directed.";
   }
 }
-
