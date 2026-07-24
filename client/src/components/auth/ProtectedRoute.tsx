@@ -2,6 +2,7 @@ import { useEffect } from "react";
 import { useLocation } from "wouter";
 import { useAuth } from "./AuthProvider";
 import { Loader2 } from "lucide-react";
+import { Button } from "@/components/ui/button";
 
 interface ProtectedRouteProps {
   children: React.ReactNode;
@@ -9,7 +10,7 @@ interface ProtectedRouteProps {
 }
 
 export default function ProtectedRoute({ children, requireAdmin = false }: ProtectedRouteProps) {
-  const { user, loading } = useAuth();
+  const { user, loading, role, roleLoading } = useAuth();
   const [, setLocation] = useLocation();
 
   useEffect(() => {
@@ -20,8 +21,8 @@ export default function ProtectedRoute({ children, requireAdmin = false }: Prote
     }
   }, [user, loading, setLocation]);
 
-  // Show loading spinner while checking auth
-  if (loading) {
+  // Show loading spinner while checking auth (and the role, for admin routes)
+  if (loading || (requireAdmin && !!user && roleLoading)) {
     return (
       <div className="min-h-screen flex items-center justify-center">
         <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
@@ -38,14 +39,21 @@ export default function ProtectedRoute({ children, requireAdmin = false }: Prote
     );
   }
 
-  // TODO: Check admin role from user_profiles table
-  // For now, allow all authenticated users
-  if (requireAdmin) {
-    // In a real implementation, check user role from Supabase
-    // const { data: profile } = await supabase.from('user_profiles').select('role').eq('id', user.id).single();
-    // if (profile?.role !== 'admin') {
-    //   return <div>Access denied. Admin role required.</div>;
-    // }
+  // Enforce admin role (from user_profiles) for admin-only routes
+  if (requireAdmin && role !== "admin") {
+    return (
+      <div className="min-h-screen flex items-center justify-center px-4">
+        <div className="max-w-md space-y-3 text-center">
+          <h1 className="text-2xl font-semibold tracking-tight">Access denied</h1>
+          <p className="text-sm text-muted-foreground">
+            You need administrator access to view this page.
+          </p>
+          <Button variant="outline" onClick={() => setLocation("/")}>
+            Back to home
+          </Button>
+        </div>
+      </div>
+    );
   }
 
   return <>{children}</>;

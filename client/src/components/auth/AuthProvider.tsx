@@ -6,6 +6,8 @@ interface AuthContextType {
   user: User | null;
   session: Session | null;
   loading: boolean;
+  role: string | null;
+  roleLoading: boolean;
   signIn: (email: string, password: string) => Promise<{ error: any }>;
   signUp: (email: string, password: string) => Promise<{ error: any }>;
   signOut: () => Promise<void>;
@@ -18,6 +20,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
   const [session, setSession] = useState<Session | null>(null);
   const [loading, setLoading] = useState(true);
+  const [profile, setProfile] = useState<{ userId: string; role: string | null } | null>(null);
 
   useEffect(() => {
     const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
@@ -63,6 +66,35 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return () => subscription.unsubscribe();
   }, []);
 
+  // Fetch the user's role from user_profiles once per session.
+  // Keyed on user.id so token refreshes don't trigger refetches.
+  useEffect(() => {
+    if (!user) {
+      setProfile(null);
+      return;
+    }
+
+    let cancelled = false;
+    supabase
+      .from("user_profiles")
+      .select("role")
+      .eq("id", user.id)
+      .single()
+      .then(({ data, error }) => {
+        if (cancelled) return;
+        if (error) {
+          console.error("Error fetching user role:", error);
+          setProfile({ userId: user.id, role: null });
+        } else {
+          setProfile({ userId: user.id, role: data?.role ?? null });
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [user?.id]);
+
   const signIn = async (email: string, password: string) => {
     const { error } = await supabase.auth.signInWithPassword({
       email,
@@ -90,12 +122,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return { error };
   };
 
+  const role = user && profile?.userId === user.id ? profile.role : null;
+  const roleLoading = !!user && profile?.userId !== user.id;
+
   return (
     <AuthContext.Provider
       value={{
         user,
         session,
         loading,
+        role,
+        roleLoading,
         signIn,
         signUp,
         signOut,

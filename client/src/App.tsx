@@ -3,6 +3,7 @@ import { queryClient } from "./lib/queryClient";
 import { QueryClientProvider } from "@tanstack/react-query";
 import { Toaster } from "@/components/ui/toaster";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import ErrorBoundary from "@/components/ErrorBoundary";
 import ProtectedRoute from "@/components/auth/ProtectedRoute";
 import LoginForm from "@/components/auth/LoginForm";
 import Home from "@/pages/Home";
@@ -69,12 +70,12 @@ function Router() {
       <Route path="/product/:id" component={ProductDetail} />
       <Route path="/login" component={LoginForm} />
       <Route path="/admin">
-        <ProtectedRoute>
+        <ProtectedRoute requireAdmin>
           <AdminDashboard />
         </ProtectedRoute>
       </Route>
       <Route path="/admin/:action/:id?">
-        <ProtectedRoute>
+        <ProtectedRoute requireAdmin>
           <ProductForm />
         </ProtectedRoute>
       </Route>
@@ -138,7 +139,9 @@ function App() {
       <TooltipProvider>
         <DeepSpaceBackground />
         <Toaster />
-        <Router />
+        <ErrorBoundary>
+          <Router />
+        </ErrorBoundary>
       </TooltipProvider>
     </QueryClientProvider>
   );
