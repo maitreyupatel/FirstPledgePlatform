@@ -142,3 +142,7 @@ vite.config.ts.timestamp-*
 .gstack/
 .vercel
 .claude/settings.local.json
+
+# Root-level debug scratch scripts (developer-local, never commit)
+/_*.ts
+/_*.json

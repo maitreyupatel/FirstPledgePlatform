@@ -1,5 +1,39 @@
 # Changelog
 
+## [1.1.0.0] — 2026-07-24
+
+### Security
+
+- **Prompt-injection hardening across all AI providers** — ingredient names and research snippets are untrusted input; they are now sanitized, wrapped in delimited data blocks, and every model verdict is validated before it can influence a safety rating. A manipulated response can never publish as "safe".
+- **Request validation on all product endpoints** — product create/update and ingredient vetting now reject malformed payloads (bad statuses, oversized fields, `javascript:` URLs, unbounded lists) before touching storage.
+- **Cron endpoints fail closed** — the cron secret is compared in constant time, and missing configuration now refuses requests in production instead of running unprotected.
+- **Admin UI enforces the admin role** — non-admin users see an access-denied screen instead of the dashboard; rate limiting now sees real client IPs behind Vercel.
+- **Ingredient vetting requires admin authentication** — the endpoint drives AI/search spend and cache writes; anonymous access is closed.
+- **Draft products are admin-only** — viewing unpublished products now requires the admin role, not just any signed-in account.
+
+### Added
+
+- **India-only product sourcing** — the daily ingestion pipeline now sources exclusively Indian-market products; the global EU/US fallback pool is gone, and 37 foreign-market products were removed from the catalog.
+- **FSSAI-first ingredient analysis** — food safety verdicts now lead with India's regulator (FSSAI, INS additive numbers) with FDA/EFSA as supporting references.
+- **Search-grounded research (Groq Compound)** — ingredients unknown to the local databases are analyzed with live regulatory lookups pinned to FSSAI/FDA/EFSA/EWG/PubMed, so rationales cite real regulations instead of model recall.
+- **Independent verification gate** — any "banned" or low-confidence verdict gets a second search-grounded opinion before it can publish; disagreements keep the more cautious rating and are flagged for manual review.
+- **INS additive registry** — Indian-label additive codes ("Acidity Regulator (INS 296)") resolve to verified identities locally; 13 India-common additives added with FSSAI-first notes.
+- **App-wide error boundary** — a crash in one page no longer takes down the whole app.
+- **Pipeline tuning knobs** — `GROQ_MODEL`, `GROQ_COMPOUND_MODEL`, `COMPOUND_RESEARCH`, `AI_CALL_DELAY_MS`, `BATCH_ANALYSIS`, `GOOGLE_SEARCH_DAILY_LIMIT`.
+
+### Changed
+
+- **AI models brought current** — Groq default is now `openai/gpt-oss-120b` (the previous Llama models were decommissioned by Groq); Gemini and OpenAI standby providers moved off retired models.
+- **Analysis caching is batched and race-safe** — one database lookup per product instead of two per ingredient, atomic upserts, and concurrent duplicate analyses share a single AI call.
+- **Google research quota is tracked** — approaching the daily limit warns; exceeding it degrades gracefully instead of failing silently.
+- **Every product is categorized** — the catalog's category tabs now cover the full catalog (previously untyped products were invisible to filtering).
+
+### Fixed
+
+- **Unbounded AI retry loops** — a sustained rate limit no longer recurses until the serverless function dies; retries are bounded with exponential backoff.
+- **Admin edits now appear without a reload** — product detail caches are invalidated after saves and publishes.
+- **EWG scores and confidence are bounded** — out-of-range values are rejected at write time and by database constraints.
+
 ## [1.0.2.0] — 2026-05-06
 
 ### Changed
