@@ -102,41 +102,11 @@ const INDIA_FALLBACK_BARCODES: Array<{ barcode: string; source: "food" | "beauty
   { barcode: "8901030801075", source: "beauty" }, // Vaseline Intensive Care
 ];
 
-// Global fallback barcodes when India-specific search fails
-const FALLBACK_BARCODES: Array<{ barcode: string; source: "food" | "beauty" }> = [
-  // ── Global food / beverages ────────────────────────────────────────────────
-  { barcode: "3017620422003", source: "food" },  // Nutella 400g
-  { barcode: "0030000301913", source: "food" },  // Quaker Old Fashioned Oats
-  { barcode: "0041196990005", source: "food" },  // Heinz Tomato Ketchup
-  { barcode: "0028400028738", source: "food" },  // Lay's Classic
-  { barcode: "0048500201282", source: "food" },  // Tropicana Orange Juice
-  { barcode: "9002490100070", source: "food" },  // Red Bull Energy Drink
-  { barcode: "5449000000996", source: "food" },  // Coca-Cola Original (EU)
-  { barcode: "5449000131805", source: "food" },  // Coca-Cola Zero Sugar
-  { barcode: "7622300489861", source: "food" },  // Oreo Original
-  { barcode: "5000112547580", source: "food" },  // Cadbury Dairy Milk
-  { barcode: "3045320094239", source: "food" },  // Kinder Bueno
-  { barcode: "4008400500010", source: "food" },  // Haribo Goldbears
-  { barcode: "8076809513364", source: "food" },  // Barilla Spaghetti
-  { barcode: "3228857000920", source: "food" },  // Evian Natural Mineral Water
-  { barcode: "4017100302941", source: "food" },  // Knorr Chicken Bouillon
-  { barcode: "5000157024229", source: "food" },  // McVities Digestives
-  { barcode: "3155250349793", source: "food" },  // Perrier Sparkling Water
-  { barcode: "7613031241316", source: "food" },  // Nestlé Cheerios
-  { barcode: "3046920028897", source: "food" },  // Lindt Excellence Dark 70%
-  { barcode: "5411188100928", source: "food" },  // Lotus Biscoff
-  // ── Global beauty / personal care ─────────────────────────────────────────
-  { barcode: "4005808194001", source: "beauty" }, // Nivea Creme
-  { barcode: "3574661385624", source: "beauty" }, // Cetaphil Daily Moisturizer
-  { barcode: "0079400023780", source: "beauty" }, // Dove Beauty Bar
-  { barcode: "3600521826492", source: "beauty" }, // L'Oreal Elvive
-  { barcode: "3600524018955", source: "beauty" }, // Garnier Micellar Water
-  { barcode: "3474630305083", source: "beauty" }, // L'Oreal Age Perfect
-  { barcode: "3600524039691", source: "beauty" }, // Garnier Fructis Shampoo
-  { barcode: "5000157030879", source: "beauty" }, // Simple Kind To Skin Cleanser
-  { barcode: "3614271010803", source: "beauty" }, // CeraVe Moisturizing Cream
-  { barcode: "0075609027440", source: "beauty" }, // Neutrogena Oil-Free Moisturizer
-];
+// NOTE: the former global (EU/US) fallback barcode pool was removed on purpose.
+// FirstPledge is an India-context platform: every sourced product must be an
+// Indian-market record. When the India search and India barcode pool are both
+// exhausted, the correct behavior is to ingest nothing, not to backfill with
+// foreign products.
 
 export class OpenFoodFactsService {
   private readonly USER_AGENT = "FirstPledgePlatform/1.0 (maitreypatel@getpowerplay.in)";
@@ -159,17 +129,17 @@ export class OpenFoodFactsService {
   }
 
   /**
-   * Fetch products for daily cron ingestion.
+   * Fetch products for daily cron ingestion. INDIA-ONLY sourcing:
    *
-   * Priority order:
    * 1. India-specific OFF search (countries_tags=en:india) — high scan count
    * 2. India barcode fallback list (known popular Indian brands)
-   * 3. Global category search (alternates food/beauty by day)
-   * 4. Global barcode fallback list
+   *
+   * If both fail, returns [] — the cron ingests nothing rather than
+   * backfilling with foreign-market products.
    *
    * @param checkExists - optional async fn; returns true if product is already in DB.
    *   Used to skip already-ingested barcodes from fallback lists so the pool
-   *   never appears exhausted even after all 30+ barcodes have been seen once.
+   *   never appears exhausted even after all barcodes have been seen once.
    */
   async fetchDailyProducts(
     count: number = 2,
@@ -220,25 +190,10 @@ export class OpenFoodFactsService {
       return indiaBarcode;
     }
 
-    // ── Step 3: Global category search ────────────────────────────
-    const globalCategory = indiaCategories[(dayOfYear + 3) % indiaCategories.length];
-    const globalPage = Math.floor(dayOfYear / 7) % 10 + 1;
-    try {
-      const globalResults = await this.fetchByCategory(globalCategory, source, count, globalPage);
-      if (globalResults.length > 0) {
-        console.log(`[OFF] Global search hit: ${globalResults.length} products (page ${globalPage})`);
-        return globalResults;
-      }
-    } catch (err) {
-      console.warn(`[OFF] Global category search failed (${globalCategory}): ${err}`);
-    }
-
-    // ── Step 4: Global barcode fallback ───────────────────────────
-    return this.resolveBarcodeFallbacks(
-      FALLBACK_BARCODES.filter((b) => b.source === source),
-      count,
-      checkExists
-    );
+    // India-only sourcing: no global fallback. An empty day is preferable to
+    // ingesting EU/US-market products into an India-context catalog.
+    console.log("[OFF] India sources exhausted — ingesting nothing this run");
+    return [];
   }
 
   private async resolveBarcodeFallbacks(

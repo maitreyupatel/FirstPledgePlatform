@@ -4,10 +4,18 @@ import { Link } from "wouter";
 import { Search, SlidersHorizontal, X } from "lucide-react";
 import Header from "@/components/Header";
 import { useAuth } from "@/components/auth/AuthProvider";
-import type { Product } from "@shared/types";
+import type { Product, ProductType } from "@shared/types";
 
 const CATEGORIES = ["All", "Food & Drink", "Skincare", "Supplements", "Personal Care"] as const;
 type Category = typeof CATEGORIES[number];
+
+const CATEGORY_TO_TYPE: Record<Category, ProductType | "all"> = {
+  "All": "all",
+  "Food & Drink": "food",
+  "Skincare": "cosmetic",
+  "Supplements": "supplement",
+  "Personal Care": "personal_care",
+};
 
 const STATUS_LABELS: Record<string, { label: string; color: string }> = {
   safe:    { label: "Safe",    color: "var(--fp-teal-bright)" },
@@ -143,16 +151,14 @@ export default function ProductCatalog() {
 
   const filtered = useMemo(() => {
     const q = query.toLowerCase().trim();
+    const typeFilter = CATEGORY_TO_TYPE[category];
     return products.filter((p) => {
-      // Search by name or brand
-      if (q && !p.name.toLowerCase().includes(q) && !p.brand.toLowerCase().includes(q)) {
-        return false;
-      }
-      // Status filter
+      if (q && !p.name.toLowerCase().includes(q) && !p.brand.toLowerCase().includes(q)) return false;
       if (statusFilter !== "all" && p.overallStatus !== statusFilter) return false;
+      if (typeFilter !== "all" && p.productType !== typeFilter) return false;
       return true;
     });
-  }, [products, query, statusFilter]);
+  }, [products, query, statusFilter, category]);
 
   return (
     <div style={{ minHeight: "100vh", paddingTop: "64px" }}>
@@ -287,13 +293,39 @@ export default function ProductCatalog() {
               </button>
             ))}
           </div>
+
+          {/* Category tabs */}
+          <div style={{ display: "flex", alignItems: "center", gap: "0.5rem", flexWrap: "wrap" }}>
+            {CATEGORIES.map((cat) => (
+              <button
+                key={cat}
+                onClick={() => setCategory(cat)}
+                style={{
+                  padding: "0.3rem 0.85rem",
+                  borderRadius: "999px",
+                  border: category === cat
+                    ? "1px solid rgba(0,229,200,0.5)"
+                    : "1px solid var(--fp-glass-border)",
+                  background: category === cat ? "rgba(0,229,200,0.12)" : "rgba(255,255,255,0.04)",
+                  color: category === cat ? "var(--fp-teal-bright)" : "var(--fp-text-muted)",
+                  fontSize: "var(--text-xs)",
+                  fontWeight: category === cat ? 600 : 400,
+                  cursor: "pointer",
+                  transition: "all 150ms",
+                }}
+              >
+                {cat}
+              </button>
+            ))}
+          </div>
         </div>
 
         {/* Results count */}
-        {(query || statusFilter !== "all") && (
+        {(query || statusFilter !== "all" || category !== "All") && (
           <p style={{ fontSize: "var(--text-xs)", color: "var(--fp-text-muted)", marginBottom: "1.5rem" }}>
             {filtered.length} result{filtered.length !== 1 ? "s" : ""}
             {query ? ` for "${query}"` : ""}
+            {category !== "All" ? ` in ${category}` : ""}
           </p>
         )}
 

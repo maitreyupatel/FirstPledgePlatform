@@ -32,8 +32,22 @@ Deployed on Vercel. Auth via Supabase JWT with API key fallback.
 DATABASE_URL, SUPABASE_URL, SUPABASE_ANON_KEY, SUPABASE_SERVICE_ROLE_KEY
 AI_PROVIDER=groq|openai|gemini
 GROQ_API_KEY / OPENAI_API_KEY / GEMINI_API_KEY
+ADMIN_API_KEY (admin bearer fallback), CRON_SECRET (required in production)
+GOOGLE_API_KEY + GOOGLE_CX_ID (optional: citation + legacy research search)
 CLIENT_ORIGIN=http://localhost:5173
 NODE_ENV=development|production
+```
+
+Optional AI-pipeline tuning:
+
+```
+GROQ_MODEL              # default openai/gpt-oss-120b
+GROQ_COMPOUND_MODEL     # default groq/compound-mini (search-grounded research)
+COMPOUND_RESEARCH=false # disable search-grounded analysis + verification gate
+AI_CALL_DELAY_MS=10000  # pacing between fresh AI calls (default 2000)
+BATCH_ANALYSIS=true     # opt-in: analyze uncached ingredients in one call
+GOOGLE_SEARCH_DAILY_LIMIT=100  # legacy CSE research quota
+OPENAI_MODEL / GEMINI_MODEL    # standby provider overrides
 ```
 
 ## gstack
@@ -67,7 +81,7 @@ Available skills:
 
 ## Testing
 
-Run: `npm test` (Vitest, 15 tests, ~1s)
+Run: `npm test` (Vitest, 115+ tests across `tests/server/`, ~3s)
 Coverage: `npm run test:coverage`
 Test directory: `tests/server/`
 See [TESTING.md](TESTING.md) for full conventions.

@@ -20,6 +20,14 @@ import { AIVettingService } from "./services/aiVettingService";
 import { CitationService } from "./services/citationService";
 import { requireAuth, optionalAuth } from "./middleware/auth";
 import { buildCronRouter } from "./routes/cron";
+import { fromZodError } from "zod-validation-error";
+import {
+  productCreateSchema,
+  productUpdateSchema,
+  productTypeSchema,
+  vetIngredientsSchema,
+  MAX_VET_INGREDIENT_LINES,
+} from "./validation/productSchemas";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -99,6 +107,11 @@ try {
 }
 
 const app = express();
+
+// Behind Vercel's proxy the client IP arrives in X-Forwarded-For. Without
+// trust proxy, express-rate-limit keys every request on the proxy IP —
+// one shared bucket for all users (and a validation error on v8+).
+app.set("trust proxy", 1);
 
 // Note: Supabase validation is now done lazily in getStorage() function
 // This allows the Express app to start even if Supabase is not configured
@@ -220,13 +233,24 @@ app.get("/api/debug/storage", (_req, res, next) => {
 app.get("/api/products", optionalAuth, async (req, res) => {
   try {
     const storageInstance = getStorage();
-    // includeUnpublished only honoured for authenticated requests (admin use)
-    const isAuthenticated = !!(req as any).user;
-    const includeUnpublished = isAuthenticated && req.query.includeUnpublished === "true";
-    if (process.env.NODE_ENV === 'development') {
-      console.log("Fetching products, includeUnpublished:", includeUnpublished);
+    // includeUnpublished requires the ADMIN role — any self-registered
+    // account is authenticated, but drafts are admin-only data.
+    const isAdmin = (req as any).user?.role === "admin";
+    const includeUnpublished = isAdmin && req.query.includeUnpublished === "true";
+
+    let productType: string | undefined;
+    if (req.query.productType !== undefined) {
+      const parsedType = productTypeSchema.safeParse(req.query.productType);
+      if (!parsedType.success) {
+        res.status(400).json({ error: "Invalid productType" });
+        return;
+      }
+      productType = parsedType.data;
     }
-    const products = await storageInstance.list({ includeUnpublished });
+    if (process.env.NODE_ENV === 'development') {
+      console.log("Fetching products, includeUnpublished:", includeUnpublished, "productType:", productType);
+    }
+    const products = await storageInstance.list({ includeUnpublished, productType: productType as any });
     console.log(`Found ${products.length} products`);
     res.json(products);
   } catch (error) {
@@ -260,9 +284,9 @@ app.get("/api/products", optionalAuth, async (req, res) => {
 app.get("/api/products/:id", optionalAuth, async (req, res) => {
   try {
     const storageInstance = getStorage();
-    // includeUnpublished only honoured for authenticated requests (admin use)
-    const isAuthenticated = !!(req as any).user;
-    const includeUnpublished = isAuthenticated && req.query.includeUnpublished === "true";
+    // includeUnpublished requires the ADMIN role (drafts are admin-only data)
+    const isAdmin = (req as any).user?.role === "admin";
+    const includeUnpublished = isAdmin && req.query.includeUnpublished === "true";
     const product = await storageInstance.getById(req.params.id, { includeUnpublished });
 
     if (!product) {
@@ -282,22 +306,23 @@ app.get("/api/products/:id", optionalAuth, async (req, res) => {
 
 // Admin routes (auth required)
 app.post("/api/products", requireAuth, async (req, res) => {
+  const parsed = productCreateSchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({
+      error: "Invalid product payload",
+      details: fromZodError(parsed.error).message,
+    });
+    return;
+  }
+
   try {
     const storageInstance = getStorage();
-    const product = await storageInstance.create({
-      name: req.body.name,
-      brand: req.body.brand,
-      summary: req.body.summary ?? "",
-      imageUrl: req.body.imageUrl ?? "",
-      overallStatus: req.body.overallStatus,
-      status: req.body.status,
-      ingredients: req.body.ingredients ?? [],
-    });
+    const product = await storageInstance.create(parsed.data);
 
     res.status(201).json(product);
   } catch (err) {
     console.error("Error creating product:", err);
-    res.status(400).json({ 
+    res.status(400).json({
       error: "Unable to create product",
       details: err instanceof Error ? err.message : String(err)
     });
@@ -305,17 +330,18 @@ app.post("/api/products", requireAuth, async (req, res) => {
 });
 
 app.patch("/api/products/:id", requireAuth, async (req, res) => {
+  const parsed = productUpdateSchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({
+      error: "Invalid product payload",
+      details: fromZodError(parsed.error).message,
+    });
+    return;
+  }
+
   try {
     const storageInstance = getStorage();
-    const product = await storageInstance.update(req.params.id, {
-      name: req.body.name,
-      brand: req.body.brand,
-      summary: req.body.summary,
-      imageUrl: req.body.imageUrl,
-      overallStatus: req.body.overallStatus,
-      status: req.body.status,
-      ingredients: req.body.ingredients,
-    });
+    const product = await storageInstance.update(req.params.id, parsed.data);
 
     if (!product) {
       res.status(404).json({ error: "Product not found" });
@@ -397,7 +423,13 @@ app.get("/api/admin/ingredient-analyses/:name", requireAuth, async (req, res) =>
     }
 
     const analysisService = (aiVettingService as any).analysisService;
-    const analysis = await analysisService.getAnalysis(req.params.name);
+    // Cache rows are keyed by (name, product_type) — food analyses are
+    // unreachable without the type. Default cosmetic for back-compat.
+    const typeParam = productTypeSchema.safeParse(req.query.productType ?? "cosmetic");
+    if (!typeParam.success) {
+      return res.status(400).json({ error: "Invalid productType" });
+    }
+    const analysis = await analysisService.getAnalysis(req.params.name, typeParam.data);
 
     if (!analysis) {
       return res.status(404).json({ error: "Analysis not found" });
@@ -416,8 +448,12 @@ app.post("/api/admin/ingredient-analyses/:name/refresh", requireAuth, async (req
       return res.status(503).json({ error: "AI Vetting Service not available" });
     }
 
-    // Force re-analysis by analyzing the ingredient
-    const analysis = await aiVettingService.analyzeIngredient(req.params.name);
+    // Force re-analysis with the correct pipeline for the ingredient's type
+    const typeParam = productTypeSchema.safeParse(req.query.productType ?? "cosmetic");
+    if (!typeParam.success) {
+      return res.status(400).json({ error: "Invalid productType" });
+    }
+    const analysis = await aiVettingService.analyzeIngredient(req.params.name, typeParam.data);
     res.json(analysis);
   } catch (error) {
     console.error("Error refreshing analysis:", error);
@@ -471,12 +507,18 @@ const vetIngredientsLimiter = rateLimit({
   message: { error: "Too many requests. Please wait a minute before trying again." },
 });
 
-app.post("/api/vet-ingredients", vetIngredientsLimiter, async (req, res) => {
-  const payload = req.body as VetIngredientsRequest;
-  if (!payload?.ingredientsText?.trim()) {
-    res.status(400).json({ error: "ingredientsText is required" });
+// Admin-only (CLAUDE.md contract): vetting triggers AI/search spend and writes
+// to the shared analysis cache — not something anonymous callers may drive.
+app.post("/api/vet-ingredients", requireAuth, vetIngredientsLimiter, async (req, res) => {
+  const parsedPayload = vetIngredientsSchema.safeParse(req.body);
+  if (!parsedPayload.success) {
+    res.status(400).json({
+      error: "ingredientsText is required",
+      details: fromZodError(parsedPayload.error).message,
+    });
     return;
   }
+  const payload: VetIngredientsRequest = parsedPayload.data;
 
   const lines = payload.ingredientsText
     .split(/[\n,]/)
@@ -488,6 +530,13 @@ app.post("/api/vet-ingredients", vetIngredientsLimiter, async (req, res) => {
     return;
   }
 
+  if (lines.length > MAX_VET_INGREDIENT_LINES) {
+    res.status(400).json({
+      error: `Too many ingredients: ${lines.length}. Maximum per request is ${MAX_VET_INGREDIENT_LINES}.`,
+    });
+    return;
+  }
+
   try {
     let results: VetIngredientResult;
 
@@ -495,7 +544,8 @@ app.post("/api/vet-ingredients", vetIngredientsLimiter, async (req, res) => {
       // Use real AI analysis
       console.log(`🤖 Analyzing ${lines.length} ingredient(s) with AI...`);
       
-      const analyses = await aiVettingService.analyzeIngredients(lines);
+      const productType = payload.productType ?? "cosmetic";
+      const analyses = await aiVettingService.analyzeIngredients(lines, productType);
       
       // Enhance with citation search if available
       const ingredients = await Promise.all(

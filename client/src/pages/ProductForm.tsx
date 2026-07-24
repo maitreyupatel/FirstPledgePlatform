@@ -30,7 +30,7 @@ import {
 } from "@/components/ui/alert-dialog";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest } from "@/lib/queryClient";
-import { VetIngredientResult, SafetyStatus } from "@shared/types";
+import { VetIngredientResult, SafetyStatus, ProductType } from "@shared/types";
 
 interface IngredientInput {
   id: string;
@@ -47,6 +47,7 @@ interface ProductFormValues {
   imageUrl: string;
   status: "draft" | "published";
   overallStatus: SafetyStatus;
+  productType: ProductType;
 }
 
 interface ProductResponse extends ProductFormValues {
@@ -96,6 +97,7 @@ export default function ProductForm() {
       imageUrl: "",
       status: "draft",
       overallStatus: "safe",
+      productType: "unknown",
     },
   });
 
@@ -155,6 +157,7 @@ export default function ProductForm() {
         imageUrl: productData.imageUrl || "",
         status: productData.status || "draft",
         overallStatus: productData.overallStatus || calculatedStatus,
+        productType: (productData as any).productType || "unknown",
       };
       setInitialFormData(initialData);
       setInitialIngredients(JSON.parse(JSON.stringify(loadedIngredients))); // Deep copy
@@ -230,6 +233,7 @@ export default function ProductForm() {
     mutationFn: async (text: string) => {
       const response = await apiRequest("POST", "/api/vet-ingredients", {
         ingredientsText: text,
+        productType: form.getValues("productType"),
       });
       return (await response.json()) as VetIngredientResult;
     },
@@ -286,6 +290,10 @@ export default function ProductForm() {
         queryClient.invalidateQueries({
           queryKey: [`/api/products/${productId}?includeUnpublished=true`],
         });
+        // Public product detail page uses the key without the query string
+        queryClient.invalidateQueries({
+          queryKey: [`/api/products/${productId}`],
+        });
         // Refetch the product to ensure we have the latest data
         // The useEffect will handle updating the form when productData changes
         setTimeout(() => {
@@ -302,6 +310,7 @@ export default function ProductForm() {
           imageUrl: savedProduct.imageUrl || "",
           status: savedProduct.status || "draft",
           overallStatus: savedProduct.overallStatus || "safe",
+          productType: savedProduct.productType || "unknown",
         };
         setInitialFormData(updatedInitialData);
         setInitialIngredients(JSON.parse(JSON.stringify(savedProduct.ingredients ?? [])));
@@ -456,7 +465,21 @@ export default function ProductForm() {
       queryClient.invalidateQueries({
         queryKey: ["/api/products?includeUnpublished=true"],
       });
-      
+
+      // Invalidate detail queries for this product (and the original when merging a draft)
+      if (productId) {
+        queryClient.invalidateQueries({ queryKey: [`/api/products/${productId}`] });
+        queryClient.invalidateQueries({
+          queryKey: [`/api/products/${productId}?includeUnpublished=true`],
+        });
+      }
+      if (originalProductId) {
+        queryClient.invalidateQueries({ queryKey: [`/api/products/${originalProductId}`] });
+        queryClient.invalidateQueries({
+          queryKey: [`/api/products/${originalProductId}?includeUnpublished=true`],
+        });
+      }
+
       // Reset unsaved changes tracking after successful publish
       setHasUnsavedChanges(false);
       
@@ -672,6 +695,29 @@ export default function ProductForm() {
                   <Label htmlFor="brand">Brand</Label>
                   <Input id="brand" {...form.register("brand", { required: true })} disabled={isPublishedAndLocked} />
                 </div>
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="productType">Product Type</Label>
+                <Select
+                  value={form.watch("productType")}
+                  onValueChange={(v) => form.setValue("productType", v as ProductType)}
+                  disabled={isPublishedAndLocked}
+                >
+                  <SelectTrigger id="productType" disabled={isPublishedAndLocked}>
+                    <SelectValue placeholder="Select type" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="food">Food & Drink</SelectItem>
+                    <SelectItem value="cosmetic">Skincare</SelectItem>
+                    <SelectItem value="supplement">Supplement</SelectItem>
+                    <SelectItem value="personal_care">Personal Care</SelectItem>
+                    <SelectItem value="unknown">Unknown</SelectItem>
+                  </SelectContent>
+                </Select>
+                <p className="text-xs text-muted-foreground">
+                  Determines which safety database is used when vetting ingredients.
+                  Food & Drink uses FDA/EFSA. Skincare uses EWG Skin Deep.
+                </p>
               </div>
               <div className="space-y-2">
                 <Label htmlFor="imageUrl">Image URL</Label>

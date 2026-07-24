@@ -4,6 +4,7 @@ import {
   Ingredient,
   Product,
   ProductStatus,
+  ProductType,
   SafetyStatus,
 } from "../../shared/types";
 
@@ -25,6 +26,7 @@ export interface CreateProductInput {
   imageUrl: string;
   overallStatus?: SafetyStatus;
   status?: ProductStatus;
+  productType?: ProductType;
   ingredients?: CreateIngredientInput[];
   editedFromProductId?: string | null;
 }
@@ -36,6 +38,7 @@ export interface UpdateProductInput {
   imageUrl?: string;
   overallStatus?: SafetyStatus;
   status?: ProductStatus;
+  productType?: ProductType;
   ingredients?: CreateIngredientInput[];
   publishedAt?: string | null;
 }
@@ -44,6 +47,7 @@ export interface ListProductsOptions {
   includeUnpublished?: boolean;
   limit?: number;
   offset?: number;
+  productType?: ProductType;
 }
 
 export class SupabaseStorage {
@@ -66,7 +70,7 @@ export class SupabaseStorage {
   }
 
   async list(options: ListProductsOptions = {}): Promise<Product[]> {
-    const { includeUnpublished = false, limit = 100, offset = 0 } = options;
+    const { includeUnpublished = false, limit = 100, offset = 0, productType } = options;
 
     let query = this.supabase
       .from("products")
@@ -79,6 +83,10 @@ export class SupabaseStorage {
 
     if (!includeUnpublished) {
       query = query.eq("status", "published");
+    }
+
+    if (productType && productType !== "unknown") {
+      query = query.eq("product_type", productType);
     }
 
     const { data, error } = await query;
@@ -165,6 +173,7 @@ export class SupabaseStorage {
         image_url: input.imageUrl,
         overall_status: overallStatus,
         status: status,
+        product_type: input.productType ?? "unknown",
         published_at: status === "published" ? now : null,
         edited_from_product_id: input.editedFromProductId ?? null,
       })
@@ -239,6 +248,10 @@ export class SupabaseStorage {
     }
     if (input.publishedAt !== undefined) {
       updateData.published_at = input.publishedAt;
+    }
+
+    if (input.productType !== undefined) {
+      updateData.product_type = input.productType;
     }
 
     // Use provided overallStatus if given (allows manual override)
@@ -370,6 +383,7 @@ export class SupabaseStorage {
         image_url: baseProduct.imageUrl,
         overall_status: baseProduct.overallStatus,
         status: "draft",
+        product_type: baseProduct.productType ?? "unknown",
         published_at: null,
         edited_from_product_id: id,
       });
@@ -459,6 +473,7 @@ export class SupabaseStorage {
       image_url: draft.imageUrl,
       overall_status: draft.overallStatus,
       status: "published",
+      product_type: draft.productType ?? original.productType ?? "unknown",
       published_at: original.publishedAt || now,
     };
 
@@ -574,6 +589,7 @@ export class SupabaseStorage {
       summary: row.summary,
       imageUrl: row.image_url,
       status: row.status,
+      productType: (row.product_type ?? "unknown") as ProductType,
       overallStatus: row.overall_status,
       createdAt: row.created_at,
       updatedAt: row.updated_at,

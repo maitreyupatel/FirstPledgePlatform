@@ -7,7 +7,7 @@ import dotenv from 'dotenv';
 dotenv.config();
 
 import { Request, Response, NextFunction } from 'express';
-import { createClient } from '@supabase/supabase-js';
+import { createClient, SupabaseClient } from '@supabase/supabase-js';
 
 const supabaseUrl = process.env.SUPABASE_URL;
 const supabaseAnonKey = process.env.SUPABASE_ANON_KEY;
@@ -235,30 +235,42 @@ export async function optionalAuth(req: Request, res: Response, next: NextFuncti
   next();
 }
 
+// Memoized clients — one per process. requireAuth/optionalAuth run on every
+// request; constructing a fresh Supabase client each time wastes work and
+// connection state on serverless.
+let anonClient: SupabaseClient | null = null;
+let adminClient: SupabaseClient | null = null;
+
 /**
- * Create Supabase client helper
+ * Get the shared Supabase client (anon key)
  * Use this for database operations
  */
 export function getSupabaseClient() {
   if (!supabaseUrl || !supabaseAnonKey) {
     throw new Error("Supabase URL and Anon Key must be set in environment variables");
   }
-  return createClient(supabaseUrl, supabaseAnonKey);
+  if (!anonClient) {
+    anonClient = createClient(supabaseUrl, supabaseAnonKey);
+  }
+  return anonClient;
 }
 
 /**
- * Create Supabase client with service role (for admin operations)
+ * Get the shared Supabase client with service role (for admin operations)
  * WARNING: Only use on server-side, never expose to client
  */
 export function getSupabaseAdminClient() {
   if (!supabaseUrl || !supabaseServiceRoleKey) {
     throw new Error("Supabase URL and Service Role Key must be set in environment variables");
   }
-  return createClient(supabaseUrl, supabaseServiceRoleKey, {
-    auth: {
-      autoRefreshToken: false,
-      persistSession: false
-    }
-  });
+  if (!adminClient) {
+    adminClient = createClient(supabaseUrl, supabaseServiceRoleKey, {
+      auth: {
+        autoRefreshToken: false,
+        persistSession: false
+      }
+    });
+  }
+  return adminClient;
 }
 

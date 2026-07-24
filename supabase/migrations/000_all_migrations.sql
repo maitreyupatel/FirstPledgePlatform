@@ -206,6 +206,49 @@ CREATE INDEX IF NOT EXISTS idx_product_queue_requested_at ON product_queue(reque
 CREATE UNIQUE INDEX IF NOT EXISTS idx_product_queue_barcode ON product_queue(barcode) WHERE barcode IS NOT NULL;
 
 -- ============================================
+-- MIGRATION 5: Product Type
+-- ============================================
+
+DO $$ BEGIN
+  CREATE TYPE product_type_enum AS ENUM ('food', 'cosmetic', 'supplement', 'personal_care', 'unknown');
+EXCEPTION
+  WHEN duplicate_object THEN null;
+END $$;
+
+ALTER TABLE products ADD COLUMN IF NOT EXISTS product_type product_type_enum;
+UPDATE products SET product_type = 'unknown' WHERE product_type IS NULL;
+ALTER TABLE products ALTER COLUMN product_type SET DEFAULT 'unknown';
+ALTER TABLE products ALTER COLUMN product_type SET NOT NULL;
+
+ALTER TABLE ingredient_analyses ADD COLUMN IF NOT EXISTS product_type product_type_enum;
+UPDATE ingredient_analyses SET product_type = 'cosmetic' WHERE product_type IS NULL;
+ALTER TABLE ingredient_analyses ALTER COLUMN product_type SET DEFAULT 'cosmetic';
+ALTER TABLE ingredient_analyses ALTER COLUMN product_type SET NOT NULL;
+
+ALTER TABLE ingredient_analyses DROP CONSTRAINT IF EXISTS ingredient_analyses_ingredient_name_key;
+-- Guarded so this consolidated file stays re-runnable
+DO $$ BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint WHERE conname = 'ingredient_analyses_name_type_unique'
+  ) THEN
+    ALTER TABLE ingredient_analyses ADD CONSTRAINT ingredient_analyses_name_type_unique
+      UNIQUE (ingredient_name, product_type);
+  END IF;
+END $$;
+
+-- Value bounds (mirrors 007_ewg_score_bounds.sql so fresh setups don't drift)
+ALTER TABLE ingredient_analyses DROP CONSTRAINT IF EXISTS ingredient_analyses_ewg_score_bounds;
+ALTER TABLE ingredient_analyses ADD CONSTRAINT ingredient_analyses_ewg_score_bounds
+  CHECK (ewg_score IS NULL OR (ewg_score >= 1 AND ewg_score <= 10));
+ALTER TABLE ingredient_analyses DROP CONSTRAINT IF EXISTS ingredient_analyses_confidence_bounds;
+ALTER TABLE ingredient_analyses ADD CONSTRAINT ingredient_analyses_confidence_bounds
+  CHECK (confidence >= 0 AND confidence <= 1);
+DROP INDEX IF EXISTS idx_ingredient_analyses_name;
+CREATE INDEX IF NOT EXISTS idx_ingredient_analyses_name_type
+  ON ingredient_analyses(ingredient_name, product_type);
+CREATE INDEX IF NOT EXISTS idx_products_type ON products(product_type);
+
+-- ============================================
 -- VERIFICATION QUERIES
 -- Run these to verify setup:
 -- ============================================
