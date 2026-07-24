@@ -6,25 +6,61 @@
  */
 
 import { Router, Request, Response } from "express";
+import { createHash, timingSafeEqual } from "node:crypto";
 import { OpenFoodFactsService } from "../services/openFoodFactsService";
 import { AIVettingService } from "../services/aiVettingService";
 import { SupabaseStorage } from "../storage/supabaseStorage";
-import { createClient } from "@supabase/supabase-js";
+import { createClient, SupabaseClient } from "@supabase/supabase-js";
 import { parseIngredients } from "../utils/ingredientParser";
+import type { ProductType } from "@shared/types";
 
-function verifyCronSecret(req: Request, res: Response): boolean {
+function offSourceToProductType(source: "food" | "beauty"): ProductType {
+  return source === "food" ? "food" : "cosmetic";
+}
+
+/**
+ * Constant-time string comparison. Hashing both sides first equalizes length,
+ * so neither length nor content leaks through response timing.
+ */
+function secretsMatch(provided: string, expected: string): boolean {
+  const providedHash = createHash("sha256").update(provided).digest();
+  const expectedHash = createHash("sha256").update(expected).digest();
+  return timingSafeEqual(providedHash, expectedHash);
+}
+
+export function verifyCronSecret(req: Request, res: Response): boolean {
   const secret = process.env.CRON_SECRET;
   if (!secret) {
-    console.warn("CRON_SECRET not set — cron endpoints are unprotected");
-    return true;
+    // Default CLOSED: only an explicit NODE_ENV=development opens the
+    // endpoints without a secret. An unset NODE_ENV on a non-Vercel host is
+    // a common misconfiguration and must not run unprotected.
+    if (process.env.NODE_ENV === "development") {
+      console.warn("CRON_SECRET not set — allowing cron request in local development only");
+      return true;
+    }
+    console.error("CRON_SECRET not set — refusing cron request (fail closed)");
+    res.status(503).json({ error: "Cron endpoints are not configured" });
+    return false;
   }
-  const authHeader = req.headers["authorization"] ?? "";
+  const authHeader = String(req.headers["authorization"] ?? "");
   const provided = authHeader.startsWith("Bearer ") ? authHeader.slice(7) : authHeader;
-  if (provided !== secret) {
+  if (!provided || !secretsMatch(provided, secret)) {
     res.status(401).json({ error: "Unauthorized" });
     return false;
   }
   return true;
+}
+
+// One Supabase client per process — each client initializes its own
+// connection state, so per-request construction is wasted work.
+let staleRefreshClient: SupabaseClient | null = null;
+function getStaleRefreshClient(supabaseUrl: string, supabaseKey: string): SupabaseClient {
+  if (!staleRefreshClient) {
+    staleRefreshClient = createClient(supabaseUrl, supabaseKey, {
+      auth: { autoRefreshToken: false, persistSession: false },
+    });
+  }
+  return staleRefreshClient;
 }
 
 
@@ -116,17 +152,23 @@ export function buildCronRouter(
 
         // Cap at MAX_INGREDIENTS to stay within time budget
         const toAnalyze = ingredientNames.slice(0, MAX_INGREDIENTS);
-        console.log(`[cron/daily-ingest] Analyzing "${offProduct.name}" — ${toAnalyze.length} ingredients`);
+        const productType = offSourceToProductType(offProduct.source);
+        console.log(`[cron/daily-ingest] Analyzing "${offProduct.name}" (${productType}) — ${toAnalyze.length} ingredients`);
 
-        const analyses = await aiVettingService.analyzeIngredients(toAnalyze);
+        const analyses = await aiVettingService.analyzeIngredients(toAnalyze, productType);
 
         const overallConfidence = analyses.reduce((sum, a) => sum + a.confidence, 0) / analyses.length;
         const hasBanned = analyses.some((a) => a.status === "banned");
-        const shouldPublish = overallConfidence >= 0.7 && !hasBanned;
+        // Any single low-confidence ingredient (incl. verification-gate
+        // disagreements, which cap at 0.5) forces a draft — an average can't
+        // wash out one flagged verdict.
+        const hasLowConfidence = analyses.some((a) => a.confidence < 0.6);
+        const shouldPublish = overallConfidence >= 0.7 && !hasBanned && !hasLowConfidence;
 
         const createdProduct = await getStorage().create({
           name: offProduct.name,
           brand: offProduct.brand,
+          productType,
           summary: `AI-vetted via FirstPledge. ${toAnalyze.length} ingredients analyzed from ${offProduct.source === "food" ? "Open Food Facts" : "Open Beauty Facts"} (ODbL license).`,
           imageUrl: offProduct.imageUrl,
           status: shouldPublish ? "published" : "draft",
@@ -134,7 +176,9 @@ export function buildCronRouter(
             name: a.name,
             status: a.status,
             rationale: a.rationale,
-            sourceUrl: a.sourceUrl || `https://www.ewg.org/skindeep/search/?query=${encodeURIComponent(a.name)}`,
+            sourceUrl: a.sourceUrl || (productType === "food"
+              ? `https://fdc.nal.usda.gov/food-search?query=${encodeURIComponent(a.name)}`
+              : `https://www.ewg.org/skindeep/search/?query=${encodeURIComponent(a.name)}`),
             isOverride: false,
           })),
         });
@@ -195,19 +239,17 @@ export function buildCronRouter(
       return;
     }
 
-    const supabase = createClient(supabaseUrl, supabaseKey, {
-      auth: { autoRefreshToken: false, persistSession: false },
-    });
+    const supabase = getStaleRefreshClient(supabaseUrl, supabaseKey);
 
     const refreshDays = parseInt(process.env.INGREDIENT_REFRESH_DAYS ?? "30", 10);
     const cutoff = new Date(Date.now() - refreshDays * 24 * 60 * 60 * 1000).toISOString();
 
     const { data: staleRows, error } = await supabase
       .from("ingredient_analyses")
-      .select("ingredient_name")
+      .select("ingredient_name, product_type")
       .lt("last_analyzed_at", cutoff)
       .order("last_analyzed_at", { ascending: true })
-      .limit(10); // 10 × 2s = 20s, safely within 60s limit
+      .limit(5); // Compound-grounded refreshes run ~8-12s each; 5 fits the 60s budget
 
     if (error) {
       console.error("[cron/refresh-stale-ingredients] DB error:", error);
@@ -215,24 +257,32 @@ export function buildCronRouter(
       return;
     }
 
-    const staleNames = (staleRows ?? []).map((r: any) => r.ingredient_name as string);
-    console.log(`[cron/refresh-stale-ingredients] ${staleNames.length} stale ingredients to refresh`);
+    const staleRows_ = (staleRows ?? []) as Array<{ ingredient_name: string; product_type: string }>;
+    console.log(`[cron/refresh-stale-ingredients] ${staleRows_.length} stale ingredients to refresh`);
 
-    if (staleNames.length === 0) {
+    if (staleRows_.length === 0) {
       res.json({ refreshed: 0, message: "No stale ingredients" });
       return;
     }
 
     const refreshed: string[] = [];
     const failed: string[] = [];
+    const refreshStartMs = Date.now();
 
-    for (const name of staleNames) {
+    for (const row of staleRows_) {
+      // Elapsed-time guard: search-grounded refreshes are slow; stop before
+      // Vercel's 60s limit kills the function mid-write.
+      if (Date.now() - refreshStartMs > 45_000) {
+        console.warn("[cron/refresh-stale] Approaching timeout — stopping early");
+        break;
+      }
       try {
-        await aiVettingService.analyzeIngredient(name);
-        refreshed.push(name);
+        const pt = (row.product_type || "cosmetic") as ProductType;
+        await aiVettingService.analyzeIngredient(row.ingredient_name, pt);
+        refreshed.push(`${row.ingredient_name} (${pt})`);
       } catch (err) {
-        console.error(`[cron/refresh-stale] Failed for "${name}":`, err);
-        failed.push(name);
+        console.error(`[cron/refresh-stale] Failed for "${row.ingredient_name}":`, err);
+        failed.push(row.ingredient_name);
       }
     }
 
