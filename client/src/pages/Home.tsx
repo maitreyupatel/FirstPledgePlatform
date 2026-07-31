@@ -14,6 +14,7 @@ interface Product {
   brand: string;
   imageUrl: string;
   overallStatus: "safe" | "caution" | "banned";
+  ingredientCount?: number;
 }
 
 // ── Stat count-up hook ──────────────────────────────────────────
@@ -314,9 +315,13 @@ export default function Home() {
           }}
         >
           {[
-            { value: 100, label: "Ingredients Analysed", suffix: "K+" },
-            { value: 50, label: "Verified Users", suffix: "K+" },
-            { value: 4.9, label: "Platform Rating", suffix: "" },
+            {
+              value: products?.reduce((sum, p) => sum + (p.ingredientCount ?? 0), 0) ?? 0,
+              label: "Ingredients Analysed",
+              suffix: "+",
+            },
+            { value: products?.length ?? 0, label: "Products Vetted", suffix: "" },
+            { value: 5, label: "Regulatory Sources", suffix: "" },
           ].map(({ value, label, suffix }, i) => (
             <div
               key={label}

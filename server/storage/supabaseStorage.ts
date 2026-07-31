@@ -72,11 +72,14 @@ export class SupabaseStorage {
   async list(options: ListProductsOptions = {}): Promise<Product[]> {
     const { includeUnpublished = false, limit = 100, offset = 0, productType } = options;
 
+    // List views only need card metadata — shipping every ingredient row for
+    // every product made the public catalog response ~10x heavier than needed.
+    // Detail (getById) still returns full ingredients.
     let query = this.supabase
       .from("products")
       .select(`
         *,
-        ingredients (*)
+        ingredients (count)
       `)
       .order("created_at", { ascending: false })
       .range(offset, offset + limit - 1);
@@ -96,7 +99,12 @@ export class SupabaseStorage {
       throw new Error(`Failed to list products: ${error.message}`);
     }
 
-    return (data || []).map((row) => this.mapRowToProduct(row));
+    return (data || []).map((row) => {
+      const ingredientCount = Array.isArray(row.ingredients)
+        ? (row.ingredients[0]?.count ?? 0)
+        : 0;
+      return { ...this.mapRowToProduct({ ...row, ingredients: [] }), ingredientCount };
+    });
   }
 
   async countProductsAfter(isoDate: string): Promise<number> {

@@ -179,8 +179,20 @@ app.use(
 );
 app.use(express.json());
 
-app.get("/api/health", (_req, res) => {
-  res.json({ status: "ok", timestamp: new Date().toISOString() });
+app.get("/api/health", async (_req, res) => {
+  // Catalog freshness rides along so external monitors can detect a silent
+  // cron dry spell (the July 2026 one went unnoticed for 6 days) without
+  // credentials. Product names/dates are public data. Best-effort: a DB
+  // hiccup must not fail the liveness check itself.
+  let catalog: { published: number; lastCreatedAt: string | null } | undefined;
+  try {
+    const latest = await getStorage().list({ includeUnpublished: false, limit: 1 });
+    const count = await getStorage().countProductsAfter("1970-01-01T00:00:00Z");
+    catalog = { published: count, lastCreatedAt: latest[0]?.createdAt ?? null };
+  } catch {
+    catalog = undefined;
+  }
+  res.json({ status: "ok", timestamp: new Date().toISOString(), catalog });
 });
 
 // Diagnostic endpoint — dev only, do not expose in production
