@@ -7,6 +7,16 @@
 Security advisor flag: Supabase Auth can check passwords against HaveIBeenPwned.
 Console-only toggle (Auth → Settings). Cannot be done via SQL/API.
 
+## Monitoring (user action recommended)
+
+### Durable external monitor on /api/health
+**Priority:** P1
+`/api/health` now returns `catalog.stale: true` after 72h without a new product.
+Point any free uptime monitor (e.g. UptimeRobot keyword alert on `"stale":true`)
+at https://maitreyupatel-first-pledgeplatform.vercel.app/api/health for
+permanent dry-spell alerting. An in-session Claude watcher covers the next
+7 days only.
+
 ## Catalog
 
 ### Research Yoga Bar Muesli+ real ingredient label
@@ -16,19 +26,17 @@ Find the real label (yogabars.in / pack photo), re-vet, publish.
 
 ### Review remaining drafts
 **Priority:** P2
-Five drafts await publish/discard: Biotique Sun Shield (junk ingredient data),
+Six drafts await publish/discard: Biotique Sun Shield (junk ingredient data),
 D'lecta Mozzarella, Ching's Red Chilli Sauce, Some By Mi (Korean-market record),
-Yoga Bar Muesli+ (above).
+Yoga Bar Muesli+ (above), Himalaya "Lip Balm" (real brand, generic product
+name — consider renaming from the pack label before publishing).
+
+### rom&nd Glasting Melting Balm convergence
+**Priority:** P3
+16/30 ingredients cached; the daily cron will finish and auto-publish/draft it
+within ~5 runs. No action needed unless it stalls.
 
 ## AI Pipeline
-
-### Deadline-aware analyzeIngredients for the cron
-**Priority:** P1
-Compound-grounded analyses run ~8-12s per unknown ingredient. daily-ingest's 50s
-guard only checks BETWEEN products; a single product with many unknown
-ingredients can still exceed Vercel's 60s limit mid-analysis. Add a deadline
-option to analyzeIngredients that aborts cleanly (skip product, no partial
-write) when the budget is exhausted. (Adversarial review 2026-07-24, P1.)
 
 ### Durable research-quota counter
 **Priority:** P3
@@ -55,6 +63,21 @@ way it replaced ResearchService, retiring the Google API dependency entirely.
 Run /design-review against localhost (needs browse daemon) — catalog, product
 detail, and admin flows. Deferred from the 2026-07-24 improvement sweep.
 
+### OFF image quality
+**Priority:** P3
+Some crowdsourced product photos are poor (e.g. an expiry-date close-up on
+Heritage buttermilk). Consider an image-quality gate or manual image overrides
+for showcase products.
+
 ## Completed
 
-_(none yet — file created 2026-07-24)_
+- **2026-07-31 — Deadline-aware analyzeIngredients** (PR #4): cron passes its
+  remaining budget; analysis aborts cleanly with cache retained; products
+  converge across daily runs. Live-verified (Tata Salt, Chocos published).
+- **2026-07-31 — Cron dry-spell fix** (PR #4): India-only cross-source sourcing,
+  shallow pages, collect-time dedup/brand gates, foreign-brand deny-list.
+- **2026-07-31 — CSP enforced** (PR #5): flipped from Report-Only after clean
+  headless-browser passes; verified live.
+- **2026-07-31 — Honest landing stats + payload trim + health freshness**
+  (PR #5, #6): real catalog-derived stats; /api/products ~16KB; /api/health
+  exposes `catalog.{published,lastCreatedAt,stale}`.

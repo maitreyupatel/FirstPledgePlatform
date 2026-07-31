@@ -305,3 +305,17 @@ The run instructions mandated `headroom_compress` on the five largest files. Emp
 - `shared/schema.ts` (Drizzle) covers only `products`/`ingredients`; `ingredient_analyses` and `user_profiles` exist only in raw SQL migrations. Runtime access is via supabase-js, so nothing breaks, but schema drift risk exists if Drizzle is ever pointed at those tables.
 - `/api/vet-ingredients` is intentionally public (rate-limited 10/min/IP). On Vercel, `express-rate-limit`'s in-memory store is per-instance, so the effective global limit is higher than configured. Acceptable for launch; consider an upstream limiter later.
 - `verifyCronSecret` is now exported from cron.ts for testability.
+
+## Session 6 — 2026-07-31 (systematic improvement pass)
+
+- Cron revived (PR #4): India-only cross-source sourcing, deadline-aware analysis,
+  brand + foreign-market gates. Live evidence: Tata Salt published 0.92 (FSSAI-cited),
+  Chocos published 0.89 after 15/15 cache convergence, Jaouda "Perly" blocked by deny-list.
+- Honest landing stats (PR #5): fabricated 100K+/50K/4.9 replaced with live catalog
+  numbers (358+ ingredients, 29 products, 5 regulatory sources). Verified in browser.
+- Catalog payload 10x trim (PR #5): list returns ingredients(count); 16KB on prod.
+- CSP enforced (PR #5): zero violations in headless passes before and after flip.
+- Health freshness + staleness flag (PR #5/#6): /api/health.catalog.{published,
+  lastCreatedAt,stale}; stale=true after 72h dry. Enables zero-logic external alerting.
+- Monitoring: 7-day in-session watcher scheduled; durable UptimeRobot setup documented
+  in TODOS.md as user action.
