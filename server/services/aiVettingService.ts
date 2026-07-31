@@ -480,8 +480,22 @@ export class AIVettingService {
     return Number.isFinite(configured) && configured >= 0 ? configured : 2000;
   })();
 
-  async analyzeIngredients(ingredientNames: string[], productType: ProductType = "cosmetic"): Promise<IngredientAnalysis[]> {
+  /**
+   * Analyze a list of ingredients. `opts.deadlineAt` (epoch ms) makes the run
+   * deadline-aware for serverless callers: before STARTING each fresh
+   * analysis, if fewer than 15s remain the whole call throws — the caller
+   * skips the product cleanly instead of being killed mid-write by the
+   * platform. Already-analyzed ingredients stay cached, so a retried product
+   * resumes further along each day (self-healing).
+   */
+  async analyzeIngredients(
+    ingredientNames: string[],
+    productType: ProductType = "cosmetic",
+    opts: { deadlineAt?: number } = {}
+  ): Promise<IngredientAnalysis[]> {
     if (ingredientNames.length === 0) return [];
+    const deadlineExceeded = () =>
+      opts.deadlineAt !== undefined && Date.now() > opts.deadlineAt - 15_000;
 
     // One batched cache lookup for the entire list. Previously this was two
     // queries PER ingredient (one here, one inside analyzeIngredient) — a
@@ -510,7 +524,7 @@ export class AIVettingService {
         return !(hit && (!this.analysisService || !this.analysisService.shouldRefreshAnalysis(hit)));
       });
 
-      if (uncachedNames.length >= 4 && uncachedNames.length <= 12) {
+      if (uncachedNames.length >= 4 && uncachedNames.length <= 12 && !deadlineExceeded()) {
         try {
           const fresh = await this.analyzeUncachedBatch(uncachedNames, productType);
           fresh.forEach((analysis, key) => cached.set(key, analysis));
@@ -536,6 +550,9 @@ export class AIVettingService {
       if (isCacheHit) {
         analysis = hit!;
       } else {
+        if (deadlineExceeded()) {
+          throw new Error(`Analysis deadline exceeded after ${analyses.length}/${ingredientNames.length} ingredients — retry will resume from cache`);
+        }
         analysis = await this.analyzeFresh(name, productType);
         // Duplicate names later in the list reuse this result instead of
         // paying for a second AI call.

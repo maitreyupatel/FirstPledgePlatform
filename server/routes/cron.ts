@@ -121,6 +121,13 @@ export function buildCronRouter(
       return;
     }
 
+    // Smallest products first: within the 60s budget it is better to COMPLETE
+    // a 5-ingredient product than to nibble at a 30-ingredient one. Larger
+    // products still converge across days via the analysis cache.
+    products.sort(
+      (a, b) => parseIngredients(a.ingredientsText).length - parseIngredients(b.ingredientsText).length
+    );
+
     for (const offProduct of products) {
       // Abort if we're past 50s (leave 10s buffer before Vercel kills function)
       if (Date.now() - startMs > 50_000) {
@@ -155,7 +162,11 @@ export function buildCronRouter(
         const productType = offSourceToProductType(offProduct.source);
         console.log(`[cron/daily-ingest] Analyzing "${offProduct.name}" (${productType}) — ${toAnalyze.length} ingredients`);
 
-        const analyses = await aiVettingService.analyzeIngredients(toAnalyze, productType);
+        // Deadline: abort cleanly (product skipped, cache retained) rather
+        // than letting Vercel kill the function mid-write at 60s.
+        const analyses = await aiVettingService.analyzeIngredients(toAnalyze, productType, {
+          deadlineAt: startMs + 50_000,
+        });
 
         const overallConfidence = analyses.reduce((sum, a) => sum + a.confidence, 0) / analyses.length;
         const hasBanned = analyses.some((a) => a.status === "banned");

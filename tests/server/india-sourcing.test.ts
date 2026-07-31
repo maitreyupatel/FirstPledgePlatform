@@ -48,6 +48,39 @@ describe("OpenFoodFactsService — India-only sourcing", () => {
     }
   });
 
+  it("falls back to the other India source when the primary is dry", async () => {
+    const indiaProduct = {
+      _id: "8901030700001",
+      product_name_en: "Toned Milk",
+      brands: "Amul Fresh",
+      image_front_url: "https://images.openfoodfacts.org/x.jpg",
+      ingredients_text_en: "Toned milk, vitamin A, vitamin D, stabilizer",
+      categories: "Dairy",
+      unique_scans_n: 900,
+    };
+    // Only the FOOD host has data; beauty searches and all barcodes are dry.
+    const fetchMock = vi.fn().mockImplementation(async (url: string) => {
+      if (url.includes("world.openfoodfacts.org/api/v2/search")) {
+        return { ok: true, json: async () => ({ products: [indiaProduct] }) };
+      }
+      if (url.includes("/api/v2/search")) {
+        return { ok: true, json: async () => ({ products: [] }) };
+      }
+      return { ok: true, json: async () => ({ status: 0 }) };
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const service = new OpenFoodFactsService();
+    const products = await service.fetchDailyProducts(1);
+
+    // Regardless of which source is primary today, the food product is found
+    expect(products.length).toBeGreaterThan(0);
+    expect(products[0].brand).toBe("Amul Fresh");
+    // And every search stayed India-scoped
+    const searchUrls = fetchMock.mock.calls.map((c: any[]) => String(c[0])).filter((u) => u.includes("/api/v2/search"));
+    for (const u of searchUrls) expect(u).toContain("countries_tags=en%3Aindia");
+  });
+
   it("returns India search results when available", async () => {
     const indiaProduct = {
       _id: "8901719110672",

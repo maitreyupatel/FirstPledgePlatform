@@ -320,6 +320,16 @@ describe("batch analysis (BATCH_ANALYSIS=true)", () => {
     expect(results.every((r) => r.status === "caution")).toBe(true);
   });
 
+  it("throws cleanly when the deadline is exhausted before a fresh analysis", async () => {
+    const { service, fakeProvider } = buildService();
+    await expect(
+      service.analyzeIngredients(["uncached-thing-one", "uncached-thing-two"], "food", {
+        deadlineAt: Date.now() - 1000,
+      })
+    ).rejects.toThrow(/deadline/i);
+    expect(fakeProvider.analyzeIngredient).not.toHaveBeenCalled();
+  });
+
   it("does not batch below the threshold", async () => {
     const { service } = buildService();
     (service as any).aiProvider = new GroqProvider("fake-key");
