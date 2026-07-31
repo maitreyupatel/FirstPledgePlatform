@@ -108,6 +108,13 @@ const INDIA_FALLBACK_BARCODES: Array<{ barcode: string; source: "food" | "beauty
 // exhausted, the correct behavior is to ingest nothing, not to backfill with
 // foreign products.
 
+// OFF's countries_tags is crowdsourced and sometimes wrong — foreign-market
+// products (e.g. Moroccan dairy) appear under en:india. Brands verified as
+// foreign-market during the 2026-07 catalog cleanup are denied at source.
+// Indian arms of multinationals (Nestlé India, Kellogg's India, HUL) are NOT
+// listed — their India-tagged records are legitimate.
+const FOREIGN_BRAND_DENYLIST = /^(jaouda|lilia|hacendado|panzani|poulain|amora|elle\s*&\s*vire|m\.\s*asam|gemey|alpro|eucerin|bird'?s|lotus|barilla|evian|perrier|haribo|kinder|hollandia)\b/i;
+
 export class OpenFoodFactsService {
   private readonly USER_AGENT = "FirstPledgePlatform/1.0 (maitreypatel@getpowerplay.in)";
 
@@ -129,17 +136,22 @@ export class OpenFoodFactsService {
   }
 
   /**
-   * Fetch products for daily cron ingestion. INDIA-ONLY sourcing:
+   * Fetch products for daily cron ingestion. INDIA-ONLY sourcing.
    *
-   * 1. India-specific OFF search (countries_tags=en:india) — high scan count
-   * 2. India barcode fallback list (known popular Indian brands)
+   * OFF's India coverage is shallow, so the strategy is breadth over depth:
+   * 1. Search the day's primary source (food/beauty alternating), rotating
+   *    through up to 3 categories at shallow pages (1-3), skipping products
+   *    already in the DB at search time so top-scanned repeats don't mask
+   *    deeper results.
+   * 2. If the primary source is dry (Open Beauty Facts India often is), try
+   *    the OTHER source the same way — still India-only.
+   * 3. India barcode pool (both sources) as the final fallback.
    *
-   * If both fail, returns [] — the cron ingests nothing rather than
-   * backfilling with foreign-market products.
+   * Search requests are budgeted (max 8/run, spaced) to respect OFF's
+   * ~10 searches/minute rate limit. If everything is dry, returns [] —
+   * an empty day beats backfilling with foreign-market products.
    *
    * @param checkExists - optional async fn; returns true if product is already in DB.
-   *   Used to skip already-ingested barcodes from fallback lists so the pool
-   *   never appears exhausted even after all barcodes have been seen once.
    */
   async fetchDailyProducts(
     count: number = 2,
@@ -149,51 +161,80 @@ export class OpenFoodFactsService {
       (Date.now() - new Date(new Date().getFullYear(), 0, 0).getTime()) / 86400000
     );
 
-    const useBeauty = dayOfYear % 2 === 0;
-    const source = useBeauty ? "beauty" : "food";
+    const primary: "food" | "beauty" = dayOfYear % 2 === 0 ? "beauty" : "food";
+    const sources: Array<"food" | "beauty"> = [primary, primary === "food" ? "beauty" : "food"];
 
-    // Cycle through pages weekly so the same category shows different products
-    // across the year instead of always returning the same top-N results.
-    const page = Math.floor(dayOfYear / 7) % 10 + 1;
+    // Shallow page cycling (1-3): India-scoped categories rarely have depth
+    // beyond a few pages; deeper cycling returns empty pages for weeks.
+    const basePage = (Math.floor(dayOfYear / 7) % 3) + 1;
 
-    // ── Step 1: India-specific category search ──────────────────────
-    const indiaCategories = useBeauty ? BEAUTY_CATEGORIES : FOOD_CATEGORIES;
-    const indiaCategory = indiaCategories[dayOfYear % indiaCategories.length];
-    try {
-      const indiaResults = await this.fetchByCategoryAndCountry(indiaCategory, source, "en:india", count, page);
-      if (indiaResults.length >= count) {
-        console.log(`[OFF] India search hit: ${indiaResults.length} products in ${indiaCategory} (page ${page})`);
-        return indiaResults;
+    const collected: OFFProduct[] = [];
+    const seenBarcodes = new Set<string>();
+    let searchBudget = 8;
+
+    const collect = async (found: OFFProduct[]) => {
+      for (const p of found) {
+        if (collected.length >= count) return;
+        if (seenBarcodes.has(p.barcode)) continue;
+        seenBarcodes.add(p.barcode);
+        // Showcase-quality gate: a product without a real brand or name is
+        // not catalog material, whatever its data completeness.
+        if (!p.brand || /^unknown/i.test(p.brand) || /^unknown/i.test(p.name)) {
+          console.log(`[OFF] Skip "${p.name}" — no usable brand`);
+          continue;
+        }
+        // OFF country tags are crowdsourced; verified foreign-market brands
+        // are denied even when tagged en:india.
+        if (FOREIGN_BRAND_DENYLIST.test(p.brand.trim())) {
+          console.log(`[OFF] Skip "${p.name}" (${p.brand}) — verified foreign-market brand`);
+          continue;
+        }
+        if (checkExists && (await checkExists(p.name, p.brand))) {
+          console.log(`[OFF] Skip "${p.name}" — already in DB`);
+          continue;
+        }
+        collected.push(p);
       }
-      // Partial results — fill with India barcodes
-      if (indiaResults.length > 0) {
-        const remaining = count - indiaResults.length;
-        const barcodeResults = await this.resolveBarcodeFallbacks(
-          INDIA_FALLBACK_BARCODES.filter((b) => b.source === source),
-          remaining,
-          checkExists
-        );
-        return [...indiaResults, ...barcodeResults];
+    };
+
+    for (const source of sources) {
+      const categories = source === "beauty" ? BEAUTY_CATEGORIES : FOOD_CATEGORIES;
+      for (let c = 0; c < 3 && collected.length < count && searchBudget > 0; c++) {
+        const category = categories[(dayOfYear + c) % categories.length];
+        const pages = basePage === 1 ? [1] : [basePage, 1];
+        for (const page of pages) {
+          if (collected.length >= count || searchBudget <= 0) break;
+          searchBudget--;
+          try {
+            const found = await this.fetchByCategoryAndCountry(category, source, "en:india", count, page);
+            await collect(found);
+            if (found.length > 0) {
+              console.log(`[OFF] India ${source}/${category} page ${page}: ${found.length} usable, ${collected.length}/${count} collected`);
+            }
+          } catch (err) {
+            console.warn(`[OFF] India search failed (${source}/${category} p${page}): ${err}`);
+          }
+        }
       }
-    } catch (err) {
-      console.warn(`[OFF] India category search failed (${indiaCategory}): ${err}`);
+      if (collected.length >= count) break;
     }
 
-    // ── Step 2: India barcode fallback ─────────────────────────────
-    const indiaBarcode = await this.resolveBarcodeFallbacks(
-      INDIA_FALLBACK_BARCODES.filter((b) => b.source === source),
-      count,
-      checkExists
-    );
-    if (indiaBarcode.length > 0) {
-      console.log(`[OFF] India barcode fallback: ${indiaBarcode.length} products`);
-      return indiaBarcode;
-    }
+    if (collected.length >= count) return collected;
 
-    // India-only sourcing: no global fallback. An empty day is preferable to
-    // ingesting EU/US-market products into an India-context catalog.
-    console.log("[OFF] India sources exhausted — ingesting nothing this run");
-    return [];
+    // ── Final fallback: India barcode pool (both sources, primary first) ──
+    const pool = [
+      ...INDIA_FALLBACK_BARCODES.filter((b) => b.source === primary),
+      ...INDIA_FALLBACK_BARCODES.filter((b) => b.source !== primary),
+    ].filter((b) => !seenBarcodes.has(b.barcode));
+    const barcodeResults = await this.resolveBarcodeFallbacks(pool, count - collected.length, checkExists);
+    collected.push(...barcodeResults);
+
+    if (collected.length === 0) {
+      // India-only sourcing: no global fallback. An empty day is preferable
+      // to ingesting EU/US-market products into an India-context catalog.
+      console.log("[OFF] India sources exhausted — ingesting nothing this run");
+    }
+    return collected;
   }
 
   private async resolveBarcodeFallbacks(

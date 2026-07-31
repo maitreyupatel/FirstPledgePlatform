@@ -252,6 +252,11 @@ app.get("/api/products", optionalAuth, async (req, res) => {
     }
     const products = await storageInstance.list({ includeUnpublished, productType: productType as any });
     console.log(`Found ${products.length} products`);
+    // Public catalog is edge-cacheable: same response for every anonymous
+    // visitor; admin draft views (includeUnpublished) stay uncached.
+    if (!includeUnpublished) {
+      res.set("Cache-Control", "public, s-maxage=60, stale-while-revalidate=300");
+    }
     res.json(products);
   } catch (error) {
     console.error("Error in /api/products:", error);
