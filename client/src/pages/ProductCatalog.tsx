@@ -130,7 +130,7 @@ function ProductCard({ product }: { product: Product }) {
             </span>
           </div>
           <span style={{ fontSize: "var(--text-xs)", color: "var(--fp-text-muted)" }}>
-            {product.ingredients?.length ?? 0} ingredients
+            {product.ingredientCount ?? product.ingredients?.length ?? 0} ingredients
           </span>
         </div>
       </div>

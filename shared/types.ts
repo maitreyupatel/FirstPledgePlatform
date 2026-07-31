@@ -30,6 +30,8 @@ export interface Product {
   publishedAt?: string | null;
   editedFromProductId?: string | null;
   ingredients: Ingredient[];
+  /** List endpoints return an aggregate count instead of full ingredient rows. */
+  ingredientCount?: number;
 }
 
 export interface VetIngredientsRequest {
