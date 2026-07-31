@@ -184,11 +184,19 @@ app.get("/api/health", async (_req, res) => {
   // cron dry spell (the July 2026 one went unnoticed for 6 days) without
   // credentials. Product names/dates are public data. Best-effort: a DB
   // hiccup must not fail the liveness check itself.
-  let catalog: { published: number; lastCreatedAt: string | null } | undefined;
+  let catalog:
+    | { published: number; lastCreatedAt: string | null; stale: boolean }
+    | undefined;
   try {
     const latest = await getStorage().list({ includeUnpublished: false, limit: 1 });
     const count = await getStorage().countProductsAfter("1970-01-01T00:00:00Z");
-    catalog = { published: count, lastCreatedAt: latest[0]?.createdAt ?? null };
+    const lastCreatedAt = latest[0]?.createdAt ?? null;
+    // stale=true after 72h without a new product — computed server-side so a
+    // plain keyword monitor can alert on '"stale":true' with no date math.
+    const stale =
+      lastCreatedAt !== null &&
+      Date.now() - new Date(lastCreatedAt).getTime() > 72 * 60 * 60 * 1000;
+    catalog = { published: count, lastCreatedAt, stale };
   } catch {
     catalog = undefined;
   }
