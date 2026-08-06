@@ -81,6 +81,45 @@ describe("OpenFoodFactsService — India-only sourcing", () => {
     for (const u of searchUrls) expect(u).toContain("countries_tags=en%3Aindia");
   });
 
+  it("skips generic/placeholder product names but keeps distinctive ones", async () => {
+    const mk = (name: string, brand: string, barcode: string) => ({
+      _id: barcode,
+      product_name_en: name,
+      brands: brand,
+      image_front_url: "https://images.openfoodfacts.org/x.jpg",
+      ingredients_text_en: "water, glycerin, salt, sugar, citric acid",
+      categories: "Misc",
+      unique_scans_n: 500,
+    });
+    const fetchMock = vi.fn().mockImplementation(async (url: string) => {
+      if (url.includes("world.openfoodfacts.org/api/v2/search")) {
+        return {
+          ok: true,
+          json: async () => ({
+            products: [
+              mk("cleanser", "moisoft", "8901111111111"),
+              mk("lip balm", "himalaya", "8902222222222"),
+              mk("Chocos", "Kellogg's", "8903333333333"),
+            ],
+          }),
+        };
+      }
+      if (url.includes("/api/v2/search")) {
+        return { ok: true, json: async () => ({ products: [] }) };
+      }
+      return { ok: true, json: async () => ({ status: 0 }) };
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const service = new OpenFoodFactsService();
+    const products = await service.fetchDailyProducts(3);
+    const names = products.map((p) => p.name);
+
+    expect(names).toContain("Chocos");
+    expect(names).not.toContain("cleanser");
+    expect(names).not.toContain("lip balm");
+  });
+
   it("returns India search results when available", async () => {
     const indiaProduct = {
       _id: "8901719110672",

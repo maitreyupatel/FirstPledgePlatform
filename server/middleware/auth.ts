@@ -131,7 +131,9 @@ export async function requireAuth(req: Request, res: Response, next: NextFunctio
           return res.status(403).json({
             error: "Forbidden",
             message: "Unable to verify admin role.",
-            details: profileErr?.message
+            ...(process.env.NODE_ENV === "development"
+              ? { details: profileErr?.message }
+              : {}),
           });
         }
       } else {
@@ -168,15 +170,21 @@ export async function requireAuth(req: Request, res: Response, next: NextFunctio
 
   // No valid authentication found
   console.error("   ❌ All authentication methods failed");
-  return res.status(403).json({ 
+  // Auth-configuration details are useful when debugging locally but are an
+  // information-disclosure surface in production — never send them there.
+  return res.status(403).json({
     error: "Forbidden",
     message: "Invalid or expired token. Please log in again.",
-    debug: {
-      hasToken: !!token,
-      tokenLength: token?.length || 0,
-      hasSupabaseClient: !!supabaseClient,
-      hasApiKey: !!validApiKey
-    }
+    ...(process.env.NODE_ENV === "development"
+      ? {
+          debug: {
+            hasToken: !!token,
+            tokenLength: token?.length || 0,
+            hasSupabaseClient: !!supabaseClient,
+            hasApiKey: !!validApiKey,
+          },
+        }
+      : {}),
   });
 }
 
