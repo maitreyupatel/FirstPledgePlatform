@@ -319,3 +319,22 @@ The run instructions mandated `headroom_compress` on the five largest files. Emp
   lastCreatedAt,stale}; stale=true after 72h dry. Enables zero-logic external alerting.
 - Monitoring: 7-day in-session watcher scheduled; durable UptimeRobot setup documented
   in TODOS.md as user action.
+
+## Session 7 — 2026-08-06 (6-day performance audit + throughput fix)
+
+- Audit verdict: cron ran EVERY day Aug 1-6 (cache evidence, 2-5 fresh analyses/day),
+  published Tata Salt, Chocos, Amul butter; converged big products in background as
+  designed. Site clean under enforced CSP; staleness signal correct.
+- Throughput was the bottleneck: 60s Vercel limit = ~2 weeks for a 30-ingredient
+  product. Fixed (PR #8): maxDuration 300s (Fluid), CRON_BUDGET_MS=280s,
+  AI_CALL_DELAY_MS=20s to respect Groq free-tier 8K TPM. Live-verified 280.8s run
+  analyzing 10 fresh ingredients with clean deadline abort. ~5x throughput.
+- New gap found during the long run: OFF placeholder records with generic names
+  ("cleanser"/moisoft) pass the brand gate. Added generic-name gate (bare category
+  words + all-lowercase placeholders skipped; "Chocos"-style names kept). Junk row
+  deleted via admin API.
+- Security: production 403s leaked auth diagnostics (debug object + profile error
+  details) — now development-only, regression-tested. Verified closed on prod.
+- ADMIN_API_KEY is unset locally AND in Vercel — API-key admin fallback is
+  currently dead code everywhere; JWT login is the only admin path. Set it in
+  Vercel env if script/monitor access to admin endpoints is wanted.
