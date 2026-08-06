@@ -115,6 +115,12 @@ const INDIA_FALLBACK_BARCODES: Array<{ barcode: string; source: "food" | "beauty
 // listed — their India-tagged records are legitimate.
 const FOREIGN_BRAND_DENYLIST = /^(jaouda|lilia|hacendado|panzani|poulain|amora|elle\s*&\s*vire|m\.\s*asam|gemey|alpro|eucerin|bird'?s|lotus|barilla|evian|perrier|haribo|kinder|hollandia)\b/i;
 
+// Bare category terms that OFF contributors use as placeholder product names.
+// A real product page needs a distinctive name ("Tata Salt", "Chocos"), not
+// the category it belongs to.
+const GENERIC_PRODUCT_NAME =
+  /^(?:lip\s+|face\s+|body\s+|hair\s+)?(?:cleanser|soap|shampoo|conditioner|cream|lotion|balm|serum|toner|moisturi[sz]er|wash|gel|oil|butter|ghee|salt|sugar|milk|curd|yogurt|juice|biscuits?|cookies?|chips|namkeen|snacks?|bread|jam|honey|pickle|tea|coffee|water)$/i;
+
 export class OpenFoodFactsService {
   private readonly USER_AGENT = "FirstPledgePlatform/1.0 (maitreypatel@getpowerplay.in)";
 
@@ -187,6 +193,18 @@ export class OpenFoodFactsService {
         // are denied even when tagged en:india.
         if (FOREIGN_BRAND_DENYLIST.test(p.brand.trim())) {
           console.log(`[OFF] Skip "${p.name}" (${p.brand}) — verified foreign-market brand`);
+          continue;
+        }
+        // Generic-name gate: a bare category word ("cleanser", "lip balm") or
+        // an all-lowercase placeholder name signals a half-filled OFF record,
+        // not a real product page. Distinctive single-word names with
+        // capitalization ("Chocos") stay eligible.
+        const nameTrim = p.name.trim();
+        const isGenericName = GENERIC_PRODUCT_NAME.test(nameTrim);
+        const isLowercasePlaceholder =
+          /^[a-z][a-z\s-]*$/.test(nameTrim) && nameTrim.split(/\s+/).length <= 2;
+        if (isGenericName || isLowercasePlaceholder) {
+          console.log(`[OFF] Skip "${p.name}" (${p.brand}) — generic/placeholder product name`);
           continue;
         }
         if (checkExists && (await checkExists(p.name, p.brand))) {

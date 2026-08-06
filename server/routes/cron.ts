@@ -96,6 +96,11 @@ export function buildCronRouter(
 
     console.log(`[cron/daily-ingest] START — fetching ${COUNT} products`);
     const startMs = Date.now();
+    // Time budget for this run. Must stay ~20s under the platform's function
+    // maxDuration (vercel.json) so aborts happen cleanly, never mid-write.
+    const budgetMs = Number(process.env.CRON_BUDGET_MS) > 0
+      ? Number(process.env.CRON_BUDGET_MS)
+      : 50_000;
 
     const results: Array<{ name: string; status: string; published: boolean; reason?: string }> = [];
     // Prevent multiple products from the same brand in a single run (e.g. 3 Coca-Cola variants)
@@ -129,8 +134,8 @@ export function buildCronRouter(
     );
 
     for (const offProduct of products) {
-      // Abort if we're past 50s (leave 10s buffer before Vercel kills function)
-      if (Date.now() - startMs > 50_000) {
+      // Abort when the budget is spent (buffer before the platform kill)
+      if (Date.now() - startMs > budgetMs) {
         console.warn("[cron/daily-ingest] Approaching timeout — stopping early");
         break;
       }
@@ -163,9 +168,9 @@ export function buildCronRouter(
         console.log(`[cron/daily-ingest] Analyzing "${offProduct.name}" (${productType}) — ${toAnalyze.length} ingredients`);
 
         // Deadline: abort cleanly (product skipped, cache retained) rather
-        // than letting Vercel kill the function mid-write at 60s.
+        // than letting Vercel kill the function mid-write at maxDuration.
         const analyses = await aiVettingService.analyzeIngredients(toAnalyze, productType, {
-          deadlineAt: startMs + 50_000,
+          deadlineAt: startMs + budgetMs,
         });
 
         const overallConfidence = analyses.reduce((sum, a) => sum + a.confidence, 0) / analyses.length;

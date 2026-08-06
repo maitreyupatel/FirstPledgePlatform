@@ -34,9 +34,13 @@
   ],
   "functions": {
     "api/index.ts": {
-      "maxDuration": 60,
+      "maxDuration": 300,
       "includeFiles": "dist/index.js"
     }
+  },
+  "env": {
+    "CRON_BUDGET_MS": "280000",
+    "AI_CALL_DELAY_MS": "20000"
   },
   "crons": [
     {
