@@ -338,3 +338,26 @@ The run instructions mandated `headroom_compress` on the five largest files. Emp
 - ADMIN_API_KEY is unset locally AND in Vercel — API-key admin fallback is
   currently dead code everywhere; JWT login is the only admin path. Set it in
   Vercel env if script/monitor access to admin endpoints is wanted.
+
+## Session 8 — 2026-08-20 (deep audit: 6-track workflow + starvation root-cause)
+
+- 14-day verdict: cron ran daily Aug 7-16 (~10 fresh analyses/day at the 280s budget,
+  5 products published) then went silently dry Aug 17-20. Session watcher had expired
+  Aug 13 (7-day cap) — nobody was alerted; health stale flag was correct all along.
+- ROOT CAUSE (PR #10): fetchByCategoryAndCountry sliced pages to the top-2 usable
+  records BEFORE quality gates. Scan-count sorting put already-ingested/placeholder
+  products in the top 2, permanently hiding eligible ones below (rom&nd proven live at
+  position 3, unreachable since Aug 6). Fixed: gates see all records; two-pass sweep
+  preserves cross-source fallback; leftover budget reaches deeper categories.
+- Barcode fallback pool: 100% dead (all 30 barcodes nonexistent on OFF, errors
+  swallowed). Removed. Name gate v2 (lowercase any-length, wider generic list,
+  2-35 ingredient band). Near-dup blocking (nameSimilarity). Parser drops bare
+  class words. npm audit 10 vulns to 0. Vitest 20s timeout (cold-cache flakes).
+- Durable monitoring: .github/workflows/health-watch.yml — daily 10:43 UTC, fails
+  (= GitHub emails owner) on non-ok health or catalog.stale.
+- Catalog cleanup via admin API: deleted "Oats" + dup "Amul pasteurised butter"
+  (both cron-created); unpublished to draft: "kissan", "kissan fresh tomato",
+  "sunscreen" (Hyphen, 47 garbled ingredients), "chocolate cranberry museli" (typo
+  dup). Live catalog: 29 clean published products.
+- Post-fix live run: sourcing instantly found 2 new candidates; "Argan Oil &
+  Lavender" 16/22 analyzed in 198s with clean abort — dry spell breaks next run.
