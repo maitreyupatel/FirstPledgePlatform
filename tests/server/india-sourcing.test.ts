@@ -12,6 +12,7 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
 import { OpenFoodFactsService } from "../../server/services/openFoodFactsService.js";
 import { parseIngredients } from "../../server/utils/ingredientParser.js";
+import { namesLookAlike } from "../../server/utils/nameSimilarity.js";
 
 describe("OpenFoodFactsService — India-only sourcing", () => {
   afterEach(() => {
@@ -81,6 +82,83 @@ describe("OpenFoodFactsService — India-only sourcing", () => {
     for (const u of searchUrls) expect(u).toContain("countries_tags=en%3Aindia");
   });
 
+  it("does not let gated top-of-page products hide eligible ones below them", async () => {
+    // Regression for the Aug 2026 dry spell: pages are sorted by scan count,
+    // so the top entries are the most likely to be already-ingested or
+    // placeholder-named. A pre-gate slice(0, count) permanently hid eligible
+    // products at position count+1 (observed live: rom&nd at position 3).
+    const mk = (name: string, brand: string, barcode: string) => ({
+      _id: barcode,
+      product_name_en: name,
+      brands: brand,
+      image_front_url: "https://images.openfoodfacts.org/x.jpg",
+      ingredients_text_en:
+        "diisostearyl malate, hydrogenated polyisobutene, phytosteryl macadamiate, polyglyceryl-2 triisostearate, microcrystalline wax",
+      categories: "Lip balms",
+      unique_scans_n: 100,
+    });
+    const inDb = mk("Eva Mosturizing Lip Balm Orange", "Eva", "8901111111100");
+    const generic = mk("Lip Balm", "himalaya", "8901111111101");
+    const eligible = mk("rom&nd Glasting Melting Balm - 06 Kaya Fig", "rom&nd", "8901111111102");
+    const fetchMock = vi.fn().mockImplementation(async (url: string) => {
+      if (url.includes("world.openbeautyfacts.org/api/v2/search")) {
+        return { ok: true, json: async () => ({ products: [inDb, generic, eligible] }) };
+      }
+      if (url.includes("/api/v2/search")) {
+        return { ok: true, json: async () => ({ products: [] }) };
+      }
+      return { ok: true, json: async () => ({ status: 0 }) };
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const service = new OpenFoodFactsService();
+    const checkExists = async (name: string) => /^eva mosturizing/i.test(name.trim());
+    const products = await service.fetchDailyProducts(2, checkExists);
+
+    expect(products.map((p) => p.name)).toContain(
+      "rom&nd Glasting Melting Balm - 06 Kaya Fig"
+    );
+  });
+
+  it("skips all-lowercase placeholder names of any length and thin ingredient lists", async () => {
+    const mk = (name: string, brand: string, barcode: string, ingredients: string) => ({
+      _id: barcode,
+      product_name_en: name,
+      brands: brand,
+      image_front_url: "https://images.openfoodfacts.org/x.jpg",
+      ingredients_text_en: ingredients,
+      categories: "Misc",
+      unique_scans_n: 500,
+    });
+    const fetchMock = vi.fn().mockImplementation(async (url: string) => {
+      if (url.includes("world.openfoodfacts.org/api/v2/search")) {
+        return {
+          ok: true,
+          json: async () => ({
+            products: [
+              mk("kissan fresh tomato", "Kissan", "8901111111110", "tomato paste, sugar, salt, spice extracts"),
+              mk("Oats", "Pepsico", "8901111111111", "oats"),
+              mk("Quaker Oats Masala Magic", "Pepsico", "8901111111112", "oats, salt, sugar, onion powder, turmeric"),
+            ],
+          }),
+        };
+      }
+      if (url.includes("/api/v2/search")) {
+        return { ok: true, json: async () => ({ products: [] }) };
+      }
+      return { ok: true, json: async () => ({ status: 0 }) };
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const service = new OpenFoodFactsService();
+    const products = await service.fetchDailyProducts(3);
+    const names = products.map((p) => p.name);
+
+    expect(names).toContain("Quaker Oats Masala Magic");
+    expect(names).not.toContain("kissan fresh tomato"); // all-lowercase placeholder
+    expect(names).not.toContain("Oats"); // bare category word AND 1-ingredient list
+  });
+
   it("skips generic/placeholder product names but keeps distinctive ones", async () => {
     const mk = (name: string, brand: string, barcode: string) => ({
       _id: barcode,
@@ -146,6 +224,29 @@ describe("OpenFoodFactsService — India-only sourcing", () => {
   });
 });
 
+describe("namesLookAlike — near-duplicate product names", () => {
+  it("catches spelling-variant duplicates", () => {
+    expect(namesLookAlike("Amul Pasteurized Butter", "Amul pasteurised butter")).toBe(true);
+  });
+
+  it("catches typo + word-order duplicates", () => {
+    expect(
+      namesLookAlike("chocolate cranberry museli", "Muesli dark chocolate cranberry")
+    ).toBe(true);
+  });
+
+  it("does not flag different products from the same brand", () => {
+    expect(
+      namesLookAlike("Amul Masti Spiced Buttermilk 200ml", "Amul pasteurised butter")
+    ).toBe(false);
+  });
+
+  it("single-token names must match exactly", () => {
+    expect(namesLookAlike("kissan", "Kissan Fresh Tomato Ketchup")).toBe(false);
+    expect(namesLookAlike("Chocos", "Chocos")).toBe(true);
+  });
+});
+
 describe("parseIngredients — label-noise hardening", () => {
   it("drops 'contains' allergen disclaimers", () => {
     const out = parseIngredients("Milk solids, sugar, Contains Milk, May contain traces of nuts");
@@ -164,6 +265,20 @@ describe("parseIngredients — label-noise hardening", () => {
     const out = parseIngredients("aqua, -Butylene Glycol, '3-O-Ethyl Ascorbic Acid");
     expect(out).toContain("Butylene Glycol");
     expect(out.some((i) => i.startsWith("-") || i.startsWith("'"))).toBe(false);
+  });
+
+  it("drops bare functional-class words but keeps qualified forms", () => {
+    const out = parseIngredients(
+      "Sugar, vanilla extract, extract, citric acid, acid, flavour, natural mango flavour, emulsifier"
+    );
+    expect(out).toContain("Sugar");
+    expect(out).toContain("vanilla extract");
+    expect(out).toContain("citric acid");
+    expect(out).toContain("natural mango flavour");
+    expect(out).not.toContain("extract");
+    expect(out).not.toContain("acid");
+    expect(out).not.toContain("flavour");
+    expect(out).not.toContain("emulsifier");
   });
 
   it("still parses a normal Indian label correctly", () => {

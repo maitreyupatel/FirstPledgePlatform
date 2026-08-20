@@ -108,10 +108,13 @@ export function buildCronRouter(
 
     let products;
     try {
-      // Pass checkExists so barcode fallbacks skip products already in DB
+      // checkExists: exact match first, then near-duplicate (spelling
+      // variant / word order) so the catalog never collects the same product
+      // twice under slightly different OFF record names.
       products = await offService.fetchDailyProducts(COUNT, async (name, brand) => {
         const existing = await getStorage().findByNameAndBrand(name, brand);
-        return !!existing;
+        if (existing) return true;
+        return getStorage().hasSimilarProduct(name, brand);
       });
     } catch (err) {
       console.error("[cron/daily-ingest] OFF fetch failed:", err);

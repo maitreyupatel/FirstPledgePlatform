@@ -91,6 +91,11 @@ export function parseIngredients(rawText: string): string[] {
         // Reject label disclaimers that are not ingredients:
         // "Contains Milk", "May contain traces of nuts", "Allergy advice: ..."
         if (/^(contains|may contain|allergen advice|allergy advice|free from|for allergens)\b/i.test(s)) return false;
+        // Reject bare functional-class words with no ingredient identity —
+        // "extract", "flavour", "emulsifier" alone cannot be meaningfully
+        // analyzed and pollute the analysis cache with junk rows. Qualified
+        // forms ("vanilla extract", "citric acid") pass untouched.
+        if (/^(extracts?|flavou?rs?|colou?rs?|emulsifiers?|stabili[sz]ers?|thickeners?|preservatives?|acids?|sweeteners?|spices?)$/i.test(s)) return false;
         return true;
       })
   );

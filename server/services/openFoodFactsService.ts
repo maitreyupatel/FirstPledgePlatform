@@ -5,6 +5,8 @@
  * Docs: https://world.openfoodfacts.org/data
  */
 
+import { parseIngredients } from "../utils/ingredientParser.js";
+
 export interface OFFProduct {
   id: string;
   barcode: string;
@@ -66,41 +68,11 @@ const BEAUTY_CATEGORIES = [
   "en:toners",
 ];
 
-// Popular Indian product barcodes — priority fallback for India-first selection
-// Sourced from Open Food Facts India entries with high scan counts
-const INDIA_FALLBACK_BARCODES: Array<{ barcode: string; source: "food" | "beauty" }> = [
-  // ── Indian food / beverages ────────────────────────────────────────────────
-  { barcode: "8901719110672", source: "food" },  // Parle-G Biscuits
-  { barcode: "8901030800245", source: "food" },  // Maggi 2-Minute Noodles
-  { barcode: "8901396044072", source: "food" },  // Bournvita Health Drink
-  { barcode: "8901052003103", source: "food" },  // Haldiram's Bhujia
-  { barcode: "8901396025750", source: "food" },  // Horlicks
-  { barcode: "8901063053786", source: "food" },  // Britannia Good Day Butter Cookies
-  { barcode: "8906002570016", source: "food" },  // Paper Boat Aamras
-  { barcode: "8901030800443", source: "food" },  // Maggi Masala Noodles
-  { barcode: "8901719116483", source: "food" },  // Parle Krack-Jack
-  { barcode: "8901719112157", source: "food" },  // Monaco Biscuits
-  { barcode: "8901063149947", source: "food" },  // 50-50 Biscuits
-  { barcode: "8904317600052", source: "food" },  // Dabur Honey
-  { barcode: "8901526100017", source: "food" },  // MDH Garam Masala
-  { barcode: "8906052310007", source: "food" },  // Bournville Dark Chocolate
-  { barcode: "8906002570023", source: "food" },  // Paper Boat Jamun
-  { barcode: "8904247000024", source: "food" },  // Aashirvaad Atta
-  { barcode: "8906060060019", source: "food" },  // Patanjali Amla Juice
-  { barcode: "8901058005026", source: "food" },  // Amul Butter Milk
-  { barcode: "8901719100017", source: "food" },  // Hide & Seek Biscuits
-  // ── Indian beauty / personal care ─────────────────────────────────────────
-  { barcode: "8901138523435", source: "beauty" }, // Himalaya Neem Face Wash
-  { barcode: "8901030100047", source: "beauty" }, // Pond's Cold Cream
-  { barcode: "8901396025590", source: "beauty" }, // Lakme Sun Expert SPF
-  { barcode: "8906067260047", source: "beauty" }, // Mamaearth Vitamin C Face Wash
-  { barcode: "8906110380018", source: "beauty" }, // WOW Skin Science ACV Shampoo
-  { barcode: "8904098100019", source: "beauty" }, // Biotique Bio Cucumber Toner
-  { barcode: "8901030501017", source: "beauty" }, // Glow & Lovely Cream
-  { barcode: "8901030560137", source: "beauty" }, // Sunsilk Shampoo
-  { barcode: "8901554550033", source: "beauty" }, // Johnson's Baby Shampoo
-  { barcode: "8901030801075", source: "beauty" }, // Vaseline Intensive Care
-];
+// NOTE: the hardcoded India barcode fallback pool was removed 2026-08-20.
+// A live audit proved all 30 barcodes returned status:0 "product not found"
+// on both OFF hosts (while known-good barcodes resolved fine) — the pool had
+// never contributed a product and its failures were silent. Supply now comes
+// entirely from budget-bounded category searches.
 
 // NOTE: the former global (EU/US) fallback barcode pool was removed on purpose.
 // FirstPledge is an India-context platform: every sourced product must be an
@@ -119,7 +91,7 @@ const FOREIGN_BRAND_DENYLIST = /^(jaouda|lilia|hacendado|panzani|poulain|amora|e
 // A real product page needs a distinctive name ("Tata Salt", "Chocos"), not
 // the category it belongs to.
 const GENERIC_PRODUCT_NAME =
-  /^(?:lip\s+|face\s+|body\s+|hair\s+)?(?:cleanser|soap|shampoo|conditioner|cream|lotion|balm|serum|toner|moisturi[sz]er|wash|gel|oil|butter|ghee|salt|sugar|milk|curd|yogurt|juice|biscuits?|cookies?|chips|namkeen|snacks?|bread|jam|honey|pickle|tea|coffee|water)$/i;
+  /^(?:lip\s+|face\s+|body\s+|hair\s+)?(?:cleanser|soap|shampoo|conditioner|cream|lotion|balm|serum|toner|moisturi[sz]er|wash|gel|oil|butter|ghee|salt|sugar|milk|curd|yogurt|juice|biscuits?|cookies?|chips|namkeen|snacks?|bread|jam|honey|pickle|tea|coffee|water|oats|muesli|granola|cornflakes|cereals?|ketchup|sauce|noodles?|pasta|atta|flour|rice|dal|paneer|cheese|sunscreen|deodorant|perfume|toothpaste)$/i;
 
 export class OpenFoodFactsService {
   private readonly USER_AGENT = "FirstPledgePlatform/1.0 (maitreypatel@getpowerplay.in)";
@@ -151,7 +123,6 @@ export class OpenFoodFactsService {
    *    deeper results.
    * 2. If the primary source is dry (Open Beauty Facts India often is), try
    *    the OTHER source the same way — still India-only.
-   * 3. India barcode pool (both sources) as the final fallback.
    *
    * Search requests are budgeted (max 8/run, spaced) to respect OFF's
    * ~10 searches/minute rate limit. If everything is dry, returns [] —
@@ -195,16 +166,28 @@ export class OpenFoodFactsService {
           console.log(`[OFF] Skip "${p.name}" (${p.brand}) — verified foreign-market brand`);
           continue;
         }
-        // Generic-name gate: a bare category word ("cleanser", "lip balm") or
-        // an all-lowercase placeholder name signals a half-filled OFF record,
-        // not a real product page. Distinctive single-word names with
-        // capitalization ("Chocos") stay eligible.
+        // Generic-name gate: a bare category word ("cleanser", "Oats") or an
+        // all-lowercase placeholder name ("kissan fresh tomato") signals a
+        // half-filled OFF record, not a real product page. Distinctive
+        // capitalized names ("Chocos", "Tata Salt") stay eligible.
         const nameTrim = p.name.trim();
         const isGenericName = GENERIC_PRODUCT_NAME.test(nameTrim);
-        const isLowercasePlaceholder =
-          /^[a-z][a-z\s-]*$/.test(nameTrim) && nameTrim.split(/\s+/).length <= 2;
+        const isLowercasePlaceholder = /^[a-z][a-z\s-]*$/.test(nameTrim);
         if (isGenericName || isLowercasePlaceholder) {
           console.log(`[OFF] Skip "${p.name}" (${p.brand}) — generic/placeholder product name`);
+          continue;
+        }
+        // Ingredient-list sanity: a 1-item list makes a pointless safety
+        // report; a huge list (>35) is almost always multi-language or OCR
+        // garbage that starves the analysis budget for days without ever
+        // completing.
+        const parsedCount = parseIngredients(p.ingredientsText).length;
+        if (parsedCount < 2) {
+          console.log(`[OFF] Skip "${p.name}" (${p.brand}) — only ${parsedCount} parseable ingredient(s)`);
+          continue;
+        }
+        if (parsedCount > 35) {
+          console.log(`[OFF] Skip "${p.name}" (${p.brand}) — ${parsedCount} parsed ingredients, likely garbled label`);
           continue;
         }
         if (checkExists && (await checkExists(p.name, p.brand))) {
@@ -215,9 +198,9 @@ export class OpenFoodFactsService {
       }
     };
 
-    for (const source of sources) {
+    const sweepCategories = async (source: "food" | "beauty", from: number, to: number) => {
       const categories = source === "beauty" ? BEAUTY_CATEGORIES : FOOD_CATEGORIES;
-      for (let c = 0; c < 3 && collected.length < count && searchBudget > 0; c++) {
+      for (let c = from; c < to && c < categories.length && collected.length < count && searchBudget > 0; c++) {
         const category = categories[(dayOfYear + c) % categories.length];
         const pages = basePage === 1 ? [1] : [basePage, 1];
         for (const page of pages) {
@@ -234,18 +217,19 @@ export class OpenFoodFactsService {
           }
         }
       }
+    };
+
+    // Pass 1: 3 categories per source — the primary source must never spend
+    // the whole search budget before the cross-source fallback gets a turn.
+    for (const source of sources) {
+      await sweepCategories(source, 0, 3);
       if (collected.length >= count) break;
     }
-
-    if (collected.length >= count) return collected;
-
-    // ── Final fallback: India barcode pool (both sources, primary first) ──
-    const pool = [
-      ...INDIA_FALLBACK_BARCODES.filter((b) => b.source === primary),
-      ...INDIA_FALLBACK_BARCODES.filter((b) => b.source !== primary),
-    ].filter((b) => !seenBarcodes.has(b.barcode));
-    const barcodeResults = await this.resolveBarcodeFallbacks(pool, count - collected.length, checkExists);
-    collected.push(...barcodeResults);
+    // Pass 2: leftover budget reaches deeper into each source's category list.
+    for (const source of sources) {
+      if (collected.length >= count || searchBudget <= 0) break;
+      await sweepCategories(source, 3, Number.MAX_SAFE_INTEGER);
+    }
 
     if (collected.length === 0) {
       // India-only sourcing: no global fallback. An empty day is preferable
@@ -253,28 +237,6 @@ export class OpenFoodFactsService {
       console.log("[OFF] India sources exhausted — ingesting nothing this run");
     }
     return collected;
-  }
-
-  private async resolveBarcodeFallbacks(
-    list: Array<{ barcode: string; source: "food" | "beauty" }>,
-    count: number,
-    checkExists?: (name: string, brand: string) => Promise<boolean>
-  ): Promise<OFFProduct[]> {
-    const results: OFFProduct[] = [];
-    for (const entry of list) {
-      if (results.length >= count) break;
-      try {
-        const p = await this.fetchByBarcode(entry.barcode, entry.source);
-        if (!p) continue;
-        // Skip if already in DB — avoids returning products the cron will immediately discard
-        if (checkExists && await checkExists(p.name, p.brand)) {
-          console.log(`[OFF] Barcode ${entry.barcode} skipped — "${p.name}" already in DB`);
-          continue;
-        }
-        results.push(p);
-      } catch { continue; }
-    }
-    return results;
   }
 
   async fetchByCategoryAndCountry(
@@ -289,7 +251,7 @@ export class OpenFoodFactsService {
       categories_tags: category,
       countries_tags: countryTag,
       fields: "_id,product_name,product_name_en,brands,image_front_url,ingredients_text,ingredients_text_en,categories,unique_scans_n,completeness",
-      page_size: String(count * 4),
+      page_size: String(Math.max(count * 4, 20)),
       page: String(page),
       sort_by: "unique_scans_n",
     });
@@ -297,9 +259,13 @@ export class OpenFoodFactsService {
     const res = await this.fetchWithTimeout(url);
     if (!res.ok) throw new Error(`OFF India API ${res.status}: ${category}`);
     const data = await res.json();
+    // Return EVERY usable record — do not slice to `count` here. Pages are
+    // sorted by scan count, so the top entries are exactly the ones most
+    // likely already ingested or placeholder-named; slicing before the
+    // caller's quality gates permanently hid eligible products sitting at
+    // position count+1 (this starved the cron for days in Aug 2026).
     return (data.products ?? [])
       .filter((p: OFFApiProduct) => this.isUsable(p))
-      .slice(0, count)
       .map((p: OFFApiProduct) => this.normalize(p, source));
   }
 
