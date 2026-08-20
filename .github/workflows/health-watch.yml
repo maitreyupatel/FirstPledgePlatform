@@ -1,0 +1,33 @@
+name: Production health watch
+
+# Daily check of the public health endpoint. Fails the run — which emails the
+# repo owner — when the API is down or the ingest cron has produced nothing
+# for 72h (catalog.stale). This replaces session-bound watchers that silently
+# expired; a dry spell in Aug 2026 went unnoticed for 3 days that way.
+
+on:
+  schedule:
+    - cron: "43 10 * * *" # daily, ~90min after the 09:00 UTC ingest cron
+  workflow_dispatch:
+
+jobs:
+  health:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check /api/health
+        run: |
+          set -euo pipefail
+          BODY=$(curl -sS --max-time 30 "https://maitreyupatel-first-pledgeplatform.vercel.app/api/health")
+          echo "health response: $BODY"
+          STATUS=$(echo "$BODY" | jq -r '.status')
+          STALE=$(echo "$BODY" | jq -r '.catalog.stale')
+          LAST=$(echo "$BODY" | jq -r '.catalog.lastCreatedAt')
+          if [ "$STATUS" != "ok" ]; then
+            echo "::error::Health status is '$STATUS' (expected ok)"
+            exit 1
+          fi
+          if [ "$STALE" = "true" ]; then
+            echo "::error::Ingest cron looks dry: no new product since $LAST. Check Vercel cron logs for /api/cron/daily-ingest."
+            exit 1
+          fi
+          echo "Healthy: last product created $LAST"

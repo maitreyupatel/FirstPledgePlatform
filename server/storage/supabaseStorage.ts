@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { createClient } from "@supabase/supabase-js";
+import { namesLookAlike } from "../utils/nameSimilarity.js";
 import {
   Ingredient,
   Product,
@@ -115,6 +116,21 @@ export class SupabaseStorage {
       .gte("created_at", isoDate);
     if (error) throw new Error(`countProductsAfter failed: ${error.message}`);
     return count ?? 0;
+  }
+
+  /**
+   * Near-duplicate check: same brand, name that looks like an existing
+   * product (spelling variant / word order). Complements the exact
+   * findByNameAndBrand match — see server/utils/nameSimilarity.ts.
+   */
+  async hasSimilarProduct(name: string, brand: string): Promise<boolean> {
+    const { data, error } = await this.supabase
+      .from("products")
+      .select("name")
+      .ilike("brand", brand.trim())
+      .limit(25);
+    if (error || !data) return false;
+    return data.some((row: any) => namesLookAlike(String(row.name), name));
   }
 
   async findByNameAndBrand(name: string, brand: string): Promise<Product | null> {
