@@ -100,3 +100,20 @@ export function parseIngredients(rawText: string): string[] {
       })
   );
 }
+
+/**
+ * Heuristic for OCR/merge damage in a parsed ingredient name — leftover
+ * bracket fragments, floating punctuation, dangling connectors, or
+ * implausible length. Used by the ingest cron to hold a product as a draft
+ * when its label text parsed dirty: a trust platform must never publish
+ * ingredient names like "Carrot Flakes . Garlic Bits and Leeks )".
+ */
+export function looksGarbledIngredientName(name: string): boolean {
+  const n = name.trim();
+  if (n.length > 60) return true;
+  if (/[()[\]]/.test(n)) return true; // parser strips balanced brackets; leftovers = damage
+  if (/\s[.,;:]/.test(n)) return true; // floating punctuation ("Flakes . Garlic")
+  if (/[-&/]\s*$/.test(n)) return true; // dangling connector ("Anti caking agent -")
+  if (/\s{2,}/.test(n)) return true;
+  return false;
+}

@@ -11,7 +11,10 @@
 
 import { describe, it, expect, vi, afterEach } from "vitest";
 import { OpenFoodFactsService } from "../../server/services/openFoodFactsService.js";
-import { parseIngredients } from "../../server/utils/ingredientParser.js";
+import {
+  parseIngredients,
+  looksGarbledIngredientName,
+} from "../../server/utils/ingredientParser.js";
 import { namesLookAlike } from "../../server/utils/nameSimilarity.js";
 
 describe("OpenFoodFactsService — India-only sourcing", () => {
@@ -221,6 +224,67 @@ describe("OpenFoodFactsService — India-only sourcing", () => {
 
     expect(products.length).toBeGreaterThan(0);
     expect(products[0].brand).toBe("Parle");
+  });
+});
+
+describe("India baseline — GS1 890 barcode gate", () => {
+  it("skips imports with non-India barcodes even when tagged en:india", async () => {
+    const mk = (name: string, brand: string, barcode: string) => ({
+      _id: barcode,
+      product_name_en: name,
+      brands: brand,
+      image_front_url: "https://images.openfoodfacts.org/x.jpg",
+      ingredients_text_en: "cocoa liquor, sugar, cocoa butter, crystallized ginger, soy lecithin",
+      categories: "Chocolates",
+      unique_scans_n: 500,
+    });
+    const fetchMock = vi.fn().mockImplementation(async (url: string) => {
+      if (url.includes("world.openfoodfacts.org/api/v2/search")) {
+        return {
+          ok: true,
+          json: async () => ({
+            products: [
+              mk("Ginger Crystallized In Dark Chocolate", "Chocolove", "0716270051526"), // US barcode
+              mk("Organic Apple Cider Vinegar", "Bragg", "0074305001321"), // US barcode
+              mk("Bournville Rich Cocoa 70%", "Cadbury India", "8901233037560"), // 890 = India
+            ],
+          }),
+        };
+      }
+      if (url.includes("/api/v2/search")) {
+        return { ok: true, json: async () => ({ products: [] }) };
+      }
+      return { ok: true, json: async () => ({ status: 0 }) };
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const service = new OpenFoodFactsService();
+    const products = await service.fetchDailyProducts(3);
+    const names = products.map((p) => p.name);
+
+    expect(names).toContain("Bournville Rich Cocoa 70%");
+    expect(names).not.toContain("Ginger Crystallized In Dark Chocolate");
+    expect(names).not.toContain("Organic Apple Cider Vinegar");
+  });
+});
+
+describe("looksGarbledIngredientName — dirty label detection", () => {
+  it("flags OCR/merge damage observed in production", () => {
+    expect(looksGarbledIngredientName("Carrot Flakes . Garlic Bits and Leeks )")).toBe(true);
+    expect(looksGarbledIngredientName("Anti caking agent -")).toBe(true);
+    expect(looksGarbledIngredientName("Thickener (415")).toBe(true);
+    expect(
+      looksGarbledIngredientName(
+        "Flavours-Nature Identical Flavouring Substances Thickener-415 and other things making this implausibly long"
+      )
+    ).toBe(true);
+  });
+
+  it("passes clean ingredient names", () => {
+    expect(looksGarbledIngredientName("Iodised Salt")).toBe(false);
+    expect(looksGarbledIngredientName("citric acid")).toBe(false);
+    expect(looksGarbledIngredientName("Hydrolyzed Vegetable Protein")).toBe(false);
+    expect(looksGarbledIngredientName("acidity regulator ins 296")).toBe(false);
   });
 });
 

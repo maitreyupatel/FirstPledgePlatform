@@ -11,7 +11,7 @@ import { OpenFoodFactsService } from "../services/openFoodFactsService";
 import { AIVettingService } from "../services/aiVettingService";
 import { SupabaseStorage } from "../storage/supabaseStorage";
 import { createClient, SupabaseClient } from "@supabase/supabase-js";
-import { parseIngredients } from "../utils/ingredientParser";
+import { parseIngredients, looksGarbledIngredientName } from "../utils/ingredientParser";
 import type { ProductType } from "@shared/types";
 
 function offSourceToProductType(source: "food" | "beauty"): ProductType {
@@ -182,7 +182,11 @@ export function buildCronRouter(
         // disagreements, which cap at 0.5) forces a draft — an average can't
         // wash out one flagged verdict.
         const hasLowConfidence = analyses.some((a) => a.confidence < 0.6);
-        const shouldPublish = overallConfidence >= 0.7 && !hasBanned && !hasLowConfidence;
+        // Dirty label text (OCR fragments, merged tokens) must never reach
+        // the public catalog under a "published" badge — hold for review.
+        const hasGarbledNames = analyses.some((a) => looksGarbledIngredientName(a.name));
+        const shouldPublish =
+          overallConfidence >= 0.7 && !hasBanned && !hasLowConfidence && !hasGarbledNames;
 
         const createdProduct = await getStorage().create({
           name: offProduct.name,
@@ -213,7 +217,7 @@ export function buildCronRouter(
           published: shouldPublish,
           reason: shouldPublish
             ? `confidence ${overallConfidence.toFixed(2)}`
-            : `draft — confidence ${overallConfidence.toFixed(2)}${hasBanned ? ", has banned ingredients" : ""}`,
+            : `draft — confidence ${overallConfidence.toFixed(2)}${hasBanned ? ", has banned ingredients" : ""}${hasGarbledNames ? ", garbled ingredient names need review" : ""}`,
         });
       } catch (err) {
         console.error(`[cron/daily-ingest] Error on "${offProduct.name}":`, err);
