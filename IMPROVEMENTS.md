@@ -361,3 +361,20 @@ The run instructions mandated `headroom_compress` on the five largest files. Emp
   dup). Live catalog: 29 clean published products.
 - Post-fix live run: sourcing instantly found 2 new candidates; "Argan Oil &
   Lavender" 16/22 analyzed in 198s with clean abort — dry spell breaks next run.
+
+## Session 9 — 2026-08-25 (finished-product + India-baseline re-verification)
+
+- Throughput verdict: healthy — analysis activity every day Aug 20-24, 4 products
+  ingested in 4 days post-starvation-fix.
+- Quality verdict: 3 of 4 failed the bar. Chocolove (US) and Bragg (US) leaked via
+  OFF en:india tags; Knorr soup published with OCR-garbled ingredient names;
+  Kissan Fresh Tomato Ketchup was the one fully clean product.
+- Structural fix (PR #12): GS1 890 barcode gate — sourced products must be
+  India-registered; import leaks blocked by prefix, not per-brand whack-a-mole
+  (verified live: Moroccan Perly blocked by barcode). Trade-off: imported brands
+  sold in India (K-beauty) now excluded by design.
+- looksGarbledIngredientName guard: OCR/merge-damaged labels force draft status.
+- Catalog actions: deleted Chocolove + Bragg; unpublished Knorr to draft.
+  Live: 30 clean published products.
+- Live gate verification: "Amul cheese" correctly held as draft on a
+  banned-ingredient verdict (conf 0.88) — publish gates protecting the catalog.
