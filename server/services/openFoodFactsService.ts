@@ -85,13 +85,13 @@ const BEAUTY_CATEGORIES = [
 // foreign-market during the 2026-07 catalog cleanup are denied at source.
 // Indian arms of multinationals (Nestlé India, Kellogg's India, HUL) are NOT
 // listed — their India-tagged records are legitimate.
-const FOREIGN_BRAND_DENYLIST = /^(jaouda|lilia|hacendado|panzani|poulain|amora|elle\s*&\s*vire|m\.\s*asam|gemey|alpro|eucerin|bird'?s|lotus|barilla|evian|perrier|haribo|kinder|hollandia)\b/i;
+const FOREIGN_BRAND_DENYLIST = /^(jaouda|lilia|hacendado|panzani|poulain|amora|elle\s*&\s*vire|m\.\s*asam|gemey|alpro|eucerin|bird'?s|lotus|barilla|evian|perrier|haribo|kinder|hollandia|chocolove|bragg)\b/i;
 
 // Bare category terms that OFF contributors use as placeholder product names.
 // A real product page needs a distinctive name ("Tata Salt", "Chocos"), not
 // the category it belongs to.
 const GENERIC_PRODUCT_NAME =
-  /^(?:lip\s+|face\s+|body\s+|hair\s+)?(?:cleanser|soap|shampoo|conditioner|cream|lotion|balm|serum|toner|moisturi[sz]er|wash|gel|oil|butter|ghee|salt|sugar|milk|curd|yogurt|juice|biscuits?|cookies?|chips|namkeen|snacks?|bread|jam|honey|pickle|tea|coffee|water|oats|muesli|granola|cornflakes|cereals?|ketchup|sauce|noodles?|pasta|atta|flour|rice|dal|paneer|cheese|sunscreen|deodorant|perfume|toothpaste)$/i;
+  /^(?:lip\s+|face\s+|body\s+|hair\s+)?(?:cleanser|soap|shampoo|conditioner|cream|lotion|balm|serum|toner|moisturi[sz]er|wash|gel|oil|butter|ghee|salt|sugar|milk|curd|yogurt|juice|biscuits?|cookies?|chips|namkeen|snacks?|bread|jam|honey|pickle|tea|coffee|water|oats|muesli|granola|cornflakes|cereals?|ketchup|sauce|noodles?|pasta|atta|flour|rice|dal|paneer|cheese|sunscreen|deodorant|perfume|toothpaste|vinegar|apple\s+cider\s+vinegar)$/i;
 
 export class OpenFoodFactsService {
   private readonly USER_AGENT = "FirstPledgePlatform/1.0 (maitreypatel@getpowerplay.in)";
@@ -154,6 +154,14 @@ export class OpenFoodFactsService {
         if (collected.length >= count) return;
         if (seenBarcodes.has(p.barcode)) continue;
         seenBarcodes.add(p.barcode);
+        // India baseline: GS1 company prefix 890 = registered in India.
+        // OFF's en:india tag also catches imports (US/Korean brands stocked
+        // by Indian retailers — observed live: Chocolove, Bragg); those are
+        // out of scope for an India-context catalog.
+        if (!p.barcode.startsWith("890")) {
+          console.log(`[OFF] Skip "${p.name}" (${p.brand}) — non-India barcode ${p.barcode}`);
+          continue;
+        }
         // Showcase-quality gate: a product without a real brand or name is
         // not catalog material, whatever its data completeness.
         if (!p.brand || /^unknown/i.test(p.brand) || /^unknown/i.test(p.name)) {
