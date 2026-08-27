@@ -134,7 +134,12 @@ export class EWGService {
                        html.match(/score[:\s]*(\d+)/i) ||
                        html.match(/rating[:\s]*(\d+)/i);
     
-    const score = scoreMatch ? parseInt(scoreMatch[1], 10) : null;
+    // Clamp BEFORE deriving `found`: the loose regexes above match any
+    // "score: N" text in the page, so an out-of-range N used to produce the
+    // contradictory found=true/score=null, which downstream treated as an
+    // authoritative EWG hit (confidence inflation, skipped verification).
+    const rawScore = scoreMatch ? parseInt(scoreMatch[1], 10) : null;
+    const score = rawScore !== null && rawScore >= 1 && rawScore <= 10 ? rawScore : null;
 
     // Extract data availability
     const dataAvailabilityMatch = html.match(/data[\s-]*availability[:\s]*([^<\n]+)/i);
@@ -149,7 +154,7 @@ export class EWGService {
 
     return {
       name: ingredientName,
-      score: score !== null && score >= 1 && score <= 10 ? score : null,
+      score,
       dataAvailability,
       url,
       concerns,
@@ -171,13 +176,16 @@ export class EWGService {
       const firstMatch = matches[0][1];
       const fullUrl = firstMatch.startsWith('http') ? firstMatch : `https://www.ewg.org${firstMatch}`;
       
-      // Extract score from search result snippet if available
+      // Extract score from search result snippet if available.
+      // Same clamp-before-found rule as parseEWGPage: never report
+      // found=true with a null (out-of-range) score.
       const scoreMatch = html.match(/score[:\s]*(\d+)/i);
-      const score = scoreMatch ? parseInt(scoreMatch[1], 10) : null;
+      const rawScore = scoreMatch ? parseInt(scoreMatch[1], 10) : null;
+      const score = rawScore !== null && rawScore >= 1 && rawScore <= 10 ? rawScore : null;
 
       return {
         name: ingredientName,
-        score: score !== null && score >= 1 && score <= 10 ? score : null,
+        score,
         dataAvailability: null,
         url: fullUrl,
         concerns: [],

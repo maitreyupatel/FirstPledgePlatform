@@ -51,6 +51,27 @@ export function verifyCronSecret(req: Request, res: Response): boolean {
   return true;
 }
 
+/**
+ * Budget math for refresh-stale-ingredients. Exported for tests.
+ *
+ * Derives both knobs from CRON_BUDGET_MS instead of the old hardcoded
+ * 45s guard + LIMIT 5 (written for the obsolete 60s Hobby limit, and the
+ * direct cause of the stale-analysis backlog: 5 rows/week against a
+ * 280s budget that could take ~11).
+ *
+ * - stopAfterMs: don't START a refresh after this much elapsed time. The
+ *   margin is worst-case single-refresh latency, not a token buffer: one
+ *   refresh can run 45s compound + 45s verification + retry headroom.
+ * - fetchLimit: rows to pull, at ~25s per compound-grounded refresh.
+ */
+export function computeRefreshBudget(rawBudgetMs: unknown): { stopAfterMs: number; fetchLimit: number } {
+  const budgetMs = Number(rawBudgetMs) > 0 ? Number(rawBudgetMs) : 50_000;
+  const WORST_CASE_REFRESH_MS = 120_000;
+  const stopAfterMs = Math.max(5_000, budgetMs - WORST_CASE_REFRESH_MS);
+  const fetchLimit = Math.max(1, Math.min(40, Math.floor(budgetMs / 25_000)));
+  return { stopAfterMs, fetchLimit };
+}
+
 // One Supabase client per process — each client initializes its own
 // connection state, so per-request construction is wasted work.
 let staleRefreshClient: SupabaseClient | null = null;
@@ -77,7 +98,8 @@ export function buildCronRouter(
    * Using POST causes Vercel to receive 200 from Express catch-all (index.html)
    * and consider the cron "succeeded" while doing nothing.
    *
-   * Budget: 2 products × 8 ingredients × 2s delay = 32s < 60s Hobby limit.
+   * Budget: CRON_BUDGET_MS (280s in production per vercel.json, under the
+   * 300s maxDuration), enforced via deadlineAt inside analyzeIngredients.
    */
   router.get("/daily-ingest", async (req: Request, res: Response) => {
     if (!verifyCronSecret(req, res)) return;
@@ -88,8 +110,8 @@ export function buildCronRouter(
     }
 
     // 1 product per run to maximize ingredient coverage per product.
-    // Cached ingredients = instant (no delay). New ingredients = 2s each.
-    // Typical product: 10-15 ingr, ~5-10 new = 10-20s. Well within 60s Hobby.
+    // Cached ingredients = instant (no delay); fresh ones pay AI_CALL_DELAY_MS
+    // pacing each (20s in production for Groq TPM), bounded by budgetMs below.
     const COUNT = Math.min(parseInt(process.env.CRON_PRODUCTS_PER_DAY ?? "1", 10), 2);
     // No hard cap — analyze ALL ingredients. Timeout guard at 50s stops if needed.
     const MAX_INGREDIENTS = 50;
@@ -245,7 +267,8 @@ export function buildCronRouter(
    * GET /api/cron/refresh-stale-ingredients
    * MUST be GET — same reason as daily-ingest above.
    * Scheduled: weekly on Sunday at 02:00 UTC.
-   * Processes up to 10 stale ingredients per run (10 × 2s = 20s, safe).
+   * Row count and elapsed-time guard both derive from CRON_BUDGET_MS
+   * (see computeRefreshBudget) — 280s in production per vercel.json.
    */
   router.get("/refresh-stale-ingredients", async (req: Request, res: Response) => {
     if (!verifyCronSecret(req, res)) return;
@@ -266,13 +289,14 @@ export function buildCronRouter(
 
     const refreshDays = parseInt(process.env.INGREDIENT_REFRESH_DAYS ?? "30", 10);
     const cutoff = new Date(Date.now() - refreshDays * 24 * 60 * 60 * 1000).toISOString();
+    const { stopAfterMs, fetchLimit } = computeRefreshBudget(process.env.CRON_BUDGET_MS);
 
     const { data: staleRows, error } = await supabase
       .from("ingredient_analyses")
       .select("ingredient_name, product_type")
       .lt("last_analyzed_at", cutoff)
       .order("last_analyzed_at", { ascending: true })
-      .limit(5); // Compound-grounded refreshes run ~8-12s each; 5 fits the 60s budget
+      .limit(fetchLimit);
 
     if (error) {
       console.error("[cron/refresh-stale-ingredients] DB error:", error);
@@ -293,10 +317,11 @@ export function buildCronRouter(
     const refreshStartMs = Date.now();
 
     for (const row of staleRows_) {
-      // Elapsed-time guard: search-grounded refreshes are slow; stop before
-      // Vercel's 60s limit kills the function mid-write.
-      if (Date.now() - refreshStartMs > 45_000) {
-        console.warn("[cron/refresh-stale] Approaching timeout — stopping early");
+      // Elapsed-time guard: never START a refresh that couldn't finish its
+      // worst case (compound + verification + retries) inside the budget —
+      // being killed mid-write is the failure mode this protects against.
+      if (Date.now() - refreshStartMs > stopAfterMs) {
+        console.warn("[cron/refresh-stale] Budget exhausted — stopping early");
         break;
       }
       try {
