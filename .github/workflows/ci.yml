@@ -1,0 +1,53 @@
+name: CI
+
+# Gate every PR and every push to main on: type check, unit tests, and secret
+# scanning. The secret scan exists because commit efeb01b once added a real
+# .env to this public repo's permanent history (backlog E0.1) — gitleaks makes
+# that class of mistake fail the build instead of leaking live credentials.
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: check + test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Type check
+        run: npm run check
+
+      - name: Unit tests
+        run: npm test
+
+  secrets:
+    name: secret scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Full history so the scan covers every commit on the branch, not
+          # just the tip. Known historical leaks are allowlisted by commit SHA
+          # in .gitleaks.toml — anything NEW fails the run.
+          fetch-depth: 0
+
+      - name: gitleaks
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITLEAKS_CONFIG: .gitleaks.toml
