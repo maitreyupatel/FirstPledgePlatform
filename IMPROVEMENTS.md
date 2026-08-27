@@ -1,5 +1,36 @@
 # IMPROVEMENTS.md — Audit Log
 
+# Session 10: Backlog v2 Phase 0 — E0 security incident + CI guardrail (2026-08-28)
+
+Plan-first session over IMPROVEMENT_BACKLOG.md (E0–E7). A 5-agent read-only
+verification workflow re-checked ~27 load-bearing claims against the code
+before planning — all confirmed (several with sharpened nuance, logged in the
+plan). Baseline: 137/137 tests, tsc clean, prod health ok.
+
+## [SECURITY] E0.1 leak triage — status corrects the backlog
+Compared leaked blobs against live .env without printing values:
+- Supabase service-role + anon + Groq keys: ROTATED already (leak ≠ current;
+  independently confirmed via setup-auth.js@0fdac55f containing the old key).
+- GEMINI_API_KEY + GOOGLE_API_KEY: STILL LIVE — user must rotate (E0.1).
+- Commit efeb01b also leaked client/.env (backlog only listed .env).
+
+## [SECURITY] NEW: E0.2 — live CRON_SECRET in public history
+gitleaks full-history scan (10 findings, all triaged against live .env) found
+commit e588cc1d put .claude/settings.local.json — containing the LIVE
+CRON_SECRET — into public history. Unrotated at discovery. Anyone can invoke
+/api/cron/* with it (Groq quota burn / forced ingest runs). User must rotate.
+Docs findings were placeholder false-positives; setup-auth.js history holds
+only the already-rotated old service-role key.
+
+## [CI] E7.1 (pulled forward as E0.3 vehicle): .github/workflows/ci.yml
+npm ci + tsc + vitest + gitleaks on every PR and push to main. gitleaks config
+(.gitleaks.toml) extends defaults, allowlists 8 triaged historical commits by
+full SHA. Validated BOTH directions locally with gitleaks 8.21.2: full-history
+scan exits 0 (no leaks) and a planted AWS-key/JWT probe exits 1 (2 leaks
+found) — the scan is proven non-vacuous. Also created .env.example
+(placeholder-only, from a grep inventory of every env var the code reads) and
+fixed .gitignore, which was silently ignoring .env.example.
+
 # Session 5b: Pre-Ship Adversarial Review (2026-07-24)
 
 An independent adversarial subagent reviewed the full ship diff and returned 20

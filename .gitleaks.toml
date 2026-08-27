@@ -1,0 +1,53 @@
+# gitleaks configuration — secret scanning for CI (backlog E0.1 / E7.1).
+#
+# Extends the upstream default ruleset (AWS keys, Google API keys, JWTs,
+# private keys, generic high-entropy assignments, etc.) and adds an allowlist
+# for the ONE historical commit that leaked credentials. Those values have been
+# rotated; keeping the SHA allowlisted means CI fails on NEW secrets instead of
+# re-reporting a known, remediated incident on every single run.
+
+title = "FirstPledgePlatform secret scan"
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Triaged historical findings + non-secret fixtures"
+
+# Every commit below was triaged on 2026-08-27 by scanning full history and
+# diffing each hit against the live .env. Git history is immutable, so these
+# are allowlisted to keep CI signal on NEW secrets; rotation — not
+# allowlisting — is what makes a leaked value worthless. Do not add entries
+# here without doing the same diff-against-live triage.
+commits = [
+  # efeb01b "Deploy to production" (2025-11-21) — added real .env AND
+  # client/.env. Backlog E0.1. Supabase service-role, anon, and Groq keys have
+  # since been rotated (verified: leaked values no longer match .env).
+  # GEMINI_API_KEY and GOOGLE_API_KEY from this blob were STILL LIVE at triage
+  # time and require rotation.
+  "efeb01bd0df526faa1bb936d9e554b1be66e8e5b",
+
+  # setup-auth.js lifecycle — contained the OLD Supabase service-role key,
+  # confirmed rotated (does not match current .env). Cleaned by d88056e0.
+  "0fdac55f629560e34e464e40cde2ae90c317615e",
+  "4f196d4e43404b730f1a232499e3c50d3f959248",
+  "d88056e0528a155d0493e527b1b4388c4ed82e98",
+
+  # Documentation placeholders ("your-anon-key" style) in AUTHENTICATION_SETUP,
+  # SUPABASE_INTEGRATION, IMPLEMENTATION_SUMMARY. Verified false positives.
+  "f899b9f18b8cdac561b0bc971df9c4203467aa8f",
+
+  # .claude/settings.local.json (now gitignored, cannot recur).
+  # WARNING: e588cc1d exposed the LIVE CRON_SECRET — rotate it; this entry
+  # silences immutable history, it does NOT remediate the secret.
+  "01688c5b56b8f1cd1b6d32ec0bf63dd3807c5cf4",
+  "e588cc1d0208e9876a1aa403fc2faffbc2f1f7e8",
+  "698559cc526cfcae910caceae4b5c451d3e45458",
+]
+
+paths = [
+  # Placeholder-only template, committed deliberately. Real values live in the
+  # untracked .env (see .gitignore).
+  '''^\.env\.example$''',
+  '''package-lock\.json$''',
+]
