@@ -1,6 +1,7 @@
 import { createClient } from "@supabase/supabase-js";
 import type { IngredientAnalysis } from "./aiVettingService";
 import type { ProductType } from "@shared/types";
+import { analysisCacheKey } from "../utils/cacheKey";
 
 interface StoredAnalysis {
   id: string;
@@ -43,8 +44,9 @@ export class IngredientAnalysisService {
     this.refreshDays = refreshDays;
   }
 
+  /** Cache key — see server/utils/cacheKey.ts (code-shared, damaged names isolated). */
   normalizeIngredientName(name: string): string {
-    return name.toLowerCase().trim();
+    return analysisCacheKey(name);
   }
 
   /**

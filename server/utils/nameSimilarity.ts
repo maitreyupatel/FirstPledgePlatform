@@ -42,6 +42,38 @@ function tokenize(name: string): string[] {
 }
 
 /**
+ * Brand identity for dedup. "Haldiram's", "Haldiram" and "HALDIRAMS" are
+ * one brand — observed live: "Moong Dal (Haldiram's)" and "Haldiram moong
+ * dal (Haldiram)" were BOTH published because dedup fetched candidates by
+ * exact brand and never compared the two. Every word counts — "Parle" and
+ * "Parle Agro", "Tops" and "Top Ramen" are different companies — with the
+ * possessive, punctuation, case and a trailing plural "s" folded per word.
+ * "" for a brand with no Latin letters (callers fall back to exact match).
+ */
+export function brandKey(brand: string): string {
+  return brand
+    .toLowerCase()
+    .replace(/['’`]s\b/g, "")
+    .replace(/[^a-z0-9\s]/g, "")
+    .split(/\s+/)
+    // "&" is stripped as punctuation, so the word "and" must go too:
+    // "Dot & Key" and "Dot and key" are one brand
+    .filter((w) => w && w !== "the" && w !== "and")
+    .map((w) => (w.length >= 4 ? w.replace(/s$/, "") : w))
+    .join("");
+}
+
+/**
+ * Leading letters of a brand as typed (max 4), for a LIKE prefix that
+ * fetches every spelling variant: "Hald" matches "Haldiram's" and
+ * "Haldiram". brandKey then decides which candidates are the same brand.
+ */
+export function brandSearchPrefix(brand: string): string {
+  const m = brand.trim().match(/^[a-z0-9]+/i);
+  return (m ? m[0] : "").slice(0, 4);
+}
+
+/**
  * True when two product names look like the same product: 80%+ of the
  * shorter name's tokens appear in the other (allowing one edit per token
  * for words of 5+ chars). Single-token names must match exactly — "kissan"

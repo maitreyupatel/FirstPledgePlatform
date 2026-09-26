@@ -37,6 +37,10 @@ already rotated). Remediation, in order:
 > Gemini + Google keys STILL LIVE — rotation pending (user). Commit efeb01b
 > also leaked `client/.env`. Steps 2–3 done: gitleaks CI landed (see E0.3/E7.1),
 > `.env.example` created, scan validated non-vacuously (planted-secret probe).
+>
+> **Status 2026-09-26:** re-verified by full-value SHA-256 comparison (values
+> never printed): `GEMINI_API_KEY`, `GOOGLE_API_KEY` and `GOOGLE_CX_ID` in the
+> live `.env` STILL equal the values leaked in `efeb01b`. Rotation pending (user).
 
 **E0.2 [verified/NEW 2026-08-28]** gitleaks full-history scan found a second
 live leak the audit missed: commit `e588cc1d` committed
@@ -46,6 +50,8 @@ ingest runs and Groq-quota burn. **USER ACTION: rotate CRON_SECRET** (new
 value in Vercel env + local `.env`), then redeploy. File is gitignored now;
 recurrence is blocked by CI. Other scan hits triaged as false positives
 (docs placeholders) or already-rotated values (`setup-auth.js` history).
+> **Status 2026-09-26:** CRON_SECRET still equals the leaked value (hash
+> comparison). Rotation pending (user).
 
 ---
 
@@ -80,21 +86,77 @@ Sting Energy (food) displays a caffeine rationale written for COSMETICS
 ("safe for use in cosmetics..."). Sweep published ingredient rows whose
 rationale context contradicts the product type; re-analyze.
 
-**E1.5 [agent/medium]** `parseIngredients` destroys comma-locant chemistry:
+**E1.5 [agent/medium] ✅ DONE 2026-09-26** `parseIngredients` destroys comma-locant chemistry:
 "1,2-Hexanediol" → "Hexanediol" (a different substance analyzed and shown).
 Fix the comma-split to protect digit,digit-locant patterns; test.
+> Evidence: the parser rewrite (PR #18) splits on top-level separators only;
+> "1,2-Hexanediol" and "1,3-Butylene Glycol" survive (regression tests in
+> ingredient-parser-additives.test.ts).
 
 **E1.6 [agent/medium]** Food verdict `source_url` defaults to a USDA
 nutrition-search link that cannot support regulatory claims. Point food
 sources at the actual grounding (FSSAI/compound citation) instead.
 
-**E1.7 [agent/medium]** Merged label fragments analyzed as single
+**E1.7 [agent/medium] ✅ DONE 2026-09-26** Merged label fragments analyzed as single
 "ingredients" produce hedge-driven caution verdicts (known garbled-name class,
 now gated at ingest; this item = clean the residue inside existing published
 products' ingredient lists).
+> Evidence: 31 published products re-ingested through the admin endpoint
+> (dry run → review → apply, full-row snapshots, every write verified in the
+> DB and live). 12 kept published with corrected lists; 19 moved to draft
+> (7 damaged/truncated labels, 12 generic-declaration holds — see E1.12);
+> 2 duplicates unpublished. Published 45 → 24. Details: IMPROVEMENTS.md S11.
+
+**E1.12 [agent/high] (NEW 2026-09-26 — next PR, owner-approved)** Generic
+declarations FSSAI permits on labels — "Spices and Condiments", "Natural
+Flavouring Substances", "Nature Identical Flavouring Substances", "Seasoning"
+— get 0.2-confidence verdicts because the model will not rate an undisclosed
+category, and one such verdict holds the whole product (gate: any ingredient
+< 0.6). Nearly every Indian packaged food declares one: this held 12
+otherwise-complete products in the repair and drives the Sept draft rate.
+The model is also inconsistent ("mixed spices" 0.93, "flavours" 0.86).
+Fix: a deterministic registry verdict for generic declared categories
+("caution — composition not disclosed; FSSAI permits generic declaration"),
+confident in the verdict itself, then re-ingest the 12 drafts. Never lower
+the gate threshold.
+
+**E1.13 [ops/low] (NEW 2026-09-26)** Catalog follow-ups from the repair:
+Alpino (published; current OFF text damaged — verify against the pack);
+Glow & Lovely draft = barcode duplicate with a doubled name; a THIRD Sprite
+draft ("Coca Cola", created 2026-09-26 by the unfixed cron on main); 36
+orphaned legacy-keyed cache rows (inert; optional cleanup).
 
 **E1.8 [agent/low]** Same substance, divergent verdicts across name variants
 ("aqua" vs "water" class). Consider alias normalization before cache lookup.
+> **Partial 2026-09-26:** coded additives now share one row per code
+> ("Preservative (211)", "E211", "INS-211" → key "ins 211", sub-type kept:
+> "ins 500(ii)"), analyzed under a wording-neutral identity ("Sodium Benzoate
+> INS 211"). Uncoded aliases ("aqua"/"water") remain.
+
+**E1.9 [agent/high] ✅ DONE 2026-09-26 (NEW)** The parser deleted additive
+codes Indian labels print as bare numbers ("ACIDITY REGULATORS (330, 331)"):
+20 of 45 published products were missing declared additives (Mountain Dew
+lost sodium benzoate and tartrazine). Rewritten as a bracket scanner with one
+INS/E code grammar validated against the Codex INS list; unreadable text is
+HELD (gate → draft), never guessed or dropped. Two adversarial review rounds
+(27 + 30 confirmed findings, all fixed, each pinned by a regression test).
+Repair of published lists: see E1.7.
+
+**E1.10 [agent/medium] (NEW 2026-09-26)** Named sub-ingredients of a compound
+ingredient are not itemized — "Dark Chocolate Paste (Sugar, Edible Vegetable
+Fat, Cocoa Solids, Soy Lecithin)" is analyzed as "Dark Chocolate Paste"
+(original parser behavior, kept deliberately in the rewrite; coded additives
+inside ARE emitted). Material for a safety product: soy lecithin, palm fat and
+added sugars inside compounds go unanalyzed. Itemizing changes every
+product's list and the per-product AI budget (50-ingredient cap) — needs its
+own design pass (e.g. emit sub-items, drop the compound head).
+
+**E1.11 [agent/low] (NEW 2026-09-26)** Residual label-reading gaps seen in
+the 74-label corpus: (a) a list's final "and" merges two plain ingredients
+("Iodised Salt And Nature Identical Flavouring Substance" — Smoodh Lassi) and
+INCI "A and B" pairs stay merged; (b) OCR misspellings pass through as names
+("Maltodectrin", "Anlioxidant"). The 2026-09-26 repair corrected these by
+recorded operator edits; the parser does not.
 
 ## E2 — Admin & client correctness
 
@@ -160,6 +222,10 @@ consumer CTAs funnel into an Admin Login that offers public self-signup.
 **E3.6 [ops]** Draft triage session (14 drafts; five trivially discardable,
 nine need label research incl. Knorr name repair and the E1.2 re-vet) —
 unblocked by E2.1.
+> **Tooling 2026-09-26:** `POST /api/admin/products/:id/reingest` re-runs a
+> stored product through the cron's parse → analyze → gate path with a
+> supplied label text; dry run by default (`apply: true` to write), operator
+> `hold`, before/after report. Triage itself (now 30 drafts) still pending.
 
 **E3.7 [product/high]** Public methodology page — every credible competitor
 leads with one; FirstPledge's pipeline (registry grounding, search-grounded
@@ -205,9 +271,12 @@ and can false-positive checkExists (product skipped forever). Escape metachars.
 (not just model-availability) and sticks the downgrade for the lambda
 lifetime. Scope fallback to 404/decommission errors; don't persist.
 
-**E4.7 [agent/medium]** Cache hits display the lowercased normalized name —
+**E4.7 [agent/medium] ✅ DONE 2026-09-26** Cache hits display the lowercased normalized name —
 catalogs mix "Sodium Chloride" and "sodium chloride". Preserve display casing
 (store original label casing alongside the normalized key).
+> Evidence: analyzeIngredients returns every result (hit, fresh, coalesced)
+> under the label's own wording; regression tests in analysis-pipeline and
+> cache-review-regressions.
 
 **E4.8 [agent/medium] ✅ DONE 2026-08-28** Unknown `GET /api/*` returns 200 + index.html via the
 SPA catch-all — the exact silent-failure mode that hid a broken cron once.
@@ -219,9 +288,14 @@ Return 404 JSON for unmatched /api/* before the catch-all.
 on Vercel: CSE quota counter, circuit breaker, vet rate limiter. Document or
 back with DB.
 
-**E4.10 [agent/medium]** Health/cron-status only count PUBLISHED products, so
+**E4.10 [agent/medium] ✅ DONE 2026-09-26** Health/cron-status only count PUBLISHED products, so
 draft-heavy periods (a legitimate outcome) read as an outage. Include drafts
 in freshness (e.g. `lastCreatedAt` over all rows + separate published count).
+> Evidence: freshness over all statuses; failed reads report
+> `{error:"unavailable"}` instead of a false "stale"; the health watch fails
+> on a missed scheduled run (>24.5h), 72h with no product, or an unreadable DB.
+> Targets both September failure classes: false alarms on draft-only days,
+> and a missed run (Sep 21) that raised no alarm.
 
 **E4.11 [agent/low]** `USE_SUPABASE_STORAGE` env gates the entire analysis
 cache but is documented nowhere (works in prod today; a fresh deploy without
@@ -249,6 +323,12 @@ vite build tuning. Split routes lazily; expect large first-paint win.
 **E5.5 [agent/medium]** Product images hotlinked from OFF (~2s TTFB,
 no sizing). Proxy/cache or at least lazy-load with dimensions.
 
+**E5.7 [agent/medium] (NEW 2026-09-26)** `GET /api/products` is edge-cached
+(`Cache-Control: public`, no max-age; `X-Vercel-Cache: HIT`): after the
+repair unpublished 21 products the plain URL still listed 36 while the DB
+and a cache-busted request showed 24. Set an explicit short `s-maxage` +
+`stale-while-revalidate` (or `private`) so unpublishing takes effect promptly.
+
 **E5.6 [agent/low]** Dead heavy deps installed: framer-motion, recharts —
 remove (also relevant to E5.2).
 
@@ -273,7 +353,10 @@ limits/banned-abroad) — differentiator vs global apps.
 
 **E7.1** CI workflow: install + tsc + vitest + gitleaks on PR and main
 (carried from v1; now also the E0.3 vehicle).
-**E7.2** `ingest_runs` telemetry table (carried).
+**E7.2 ✅ DONE 2026-09-26** `ingest_runs` telemetry table (carried).
+> Evidence: migrations 010/011 applied (additive, RLS default-deny); every
+> cron run records start/finish/outcome/counts and scheduled-vs-manual
+> trigger, fail-open. Exposed via /api/health and /api/cron-status.
 **E7.3** Error tracking (carried).
 **E7.4 [agent]** Schema reconciliation: Drizzle schema missing 3 live tables
 and all indexes (`db:push` is a loaded gun; Drizzle unused at runtime —
@@ -286,15 +369,21 @@ real query patterns; drop dead `product_queue` + enums.
 dev tooling; supabase-js 29 releases behind. Upgrade pass with tests.
 **E7.9 [agent]** Rate limits on mutating admin routes + before Supabase auth
 call in requireAuth; cache /api/health (it runs 2 DB queries per anonymous hit).
+> **Partial 2026-09-26:** /api/health body memoized 60s. Rate limits pending.
 
 ## User actions (only you can do these)
 
-1. **E0.1 rotations** — Supabase service-role key, Gemini/Google keys (see top).
-2. Supabase console: leaked-password protection toggle (pending since July).
-3. Vercel: set a real `ADMIN_API_KEY`; add rotated keys.
-4. Decide: repo public vs private; imported-brands policy (E6 note: 890 gate
+1. **Merge #16 → #17 → #18** (agent merges are blocked by policy). Until #18
+   ships, the daily cron on main keeps dropping additive codes and admitting
+   brand/barcode duplicates, and the health watch false-alarms.
+2. **E0.1/E0.2 rotations** — GEMINI_API_KEY, GOOGLE_API_KEY (+ GOOGLE_CX_ID),
+   CRON_SECRET: re-verified 2026-09-26 as still equal to the leaked values.
+   Supabase + Groq already rotated.
+3. Supabase console: leaked-password protection toggle (pending since July).
+4. Vercel: set a real `ADMIN_API_KEY`; add rotated keys.
+5. Decide: repo public vs private; imported-brands policy (E6 note: 890 gate
    currently excludes K-beauty); custom domain.
-5. Re-authorize the Supabase MCP connector in claude.ai settings if MCP DB
+6. Re-authorize the Supabase MCP connector in claude.ai settings if MCP DB
    access is wanted.
 
 ## Verified healthy (don't touch)

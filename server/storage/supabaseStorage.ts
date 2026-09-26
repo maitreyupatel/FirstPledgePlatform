@@ -1,7 +1,15 @@
 import { randomUUID } from "node:crypto";
 import { createClient } from "@supabase/supabase-js";
-import { namesLookAlike } from "../utils/nameSimilarity.js";
+import { namesLookAlike, brandKey, brandSearchPrefix } from "../utils/nameSimilarity.js";
 import { escapeLike } from "../utils/likeEscape.js";
+import { offImagePath } from "../utils/offBarcode.js";
+import type {
+  IngestJob,
+  IngestOutcome,
+  IngestRunCounts,
+  IngestRunRecord,
+  IngestTrigger,
+} from "../services/ingestTelemetry.js";
 import {
   Ingredient,
   Product,
@@ -120,18 +128,157 @@ export class SupabaseStorage {
   }
 
   /**
+   * Catalog freshness across ALL statuses. A draft is a successful ingest —
+   * the publish gates held a doubtful product for review — so freshness
+   * measured on published rows alone read draft-heavy days as an outage
+   * (E4.10: 5 false health-watch failures in Sept 2026).
+   */
+  async catalogFreshness(): Promise<{
+    published: number;
+    drafts: number;
+    lastCreatedAt: string | null;
+    lastPublishedAt: string | null;
+  }> {
+    const newest = (status?: "published") => {
+      let q = this.supabase.from("products").select("created_at");
+      if (status) q = q.eq("status", status);
+      return q.order("created_at", { ascending: false }).limit(1).maybeSingle();
+    };
+    const count = (status: "published" | "draft") =>
+      this.supabase.from("products").select("id", { count: "exact", head: true }).eq("status", status);
+
+    const [published, drafts, lastAny, lastPublished] = await Promise.all([
+      count("published"),
+      count("draft"),
+      newest(),
+      newest("published"),
+    ]);
+    for (const r of [published, drafts, lastAny, lastPublished]) {
+      if (r.error) throw new Error(`catalogFreshness failed: ${r.error.message}`);
+    }
+    return {
+      published: published.count ?? 0,
+      drafts: drafts.count ?? 0,
+      lastCreatedAt: (lastAny.data as any)?.created_at ?? null,
+      lastPublishedAt: (lastPublished.data as any)?.created_at ?? null,
+    };
+  }
+
+  // ── Cron run telemetry (ingest_runs, migration 010) ─────────────────────
+  // Fail-open throughout: telemetry must never break or slow ingestion.
+
+  async startIngestRun(job: IngestJob, trigger: IngestTrigger = "manual"): Promise<string | null> {
+    try {
+      const { data, error } = await this.supabase.from("ingest_runs").insert({ job, trigger }).select("id").single();
+      if (error) throw new Error(error.message);
+      return (data as any).id as string;
+    } catch (err) {
+      console.warn(`[ingest_runs] start not recorded (${job}):`, err instanceof Error ? err.message : err);
+      return null;
+    }
+  }
+
+  async finishIngestRun(
+    id: string | null,
+    outcome: Exclude<IngestOutcome, "running">,
+    counts: IngestRunCounts = {},
+    detail?: unknown,
+  ): Promise<void> {
+    if (!id) return;
+    try {
+      const { error } = await this.supabase
+        .from("ingest_runs")
+        .update({
+          finished_at: new Date().toISOString(),
+          outcome,
+          products_created: counts.productsCreated ?? 0,
+          published: counts.published ?? 0,
+          drafts: counts.drafts ?? 0,
+          skipped: counts.skipped ?? 0,
+          refreshed: counts.refreshed ?? 0,
+          failed: counts.failed ?? 0,
+          detail: detail ?? null,
+        })
+        .eq("id", id);
+      if (error) throw new Error(error.message);
+    } catch (err) {
+      console.warn(`[ingest_runs] finish not recorded (${id}):`, err instanceof Error ? err.message : err);
+    }
+  }
+
+  /**
+   * Latest run of a job — by default the latest SCHEDULED run, so an
+   * operator's manual run cannot hide a missed Vercel invocation. Returns
+   * null only when there are no rows; a failed read THROWS, so health can
+   * tell "no run log yet" from "the run log is unreadable".
+   */
+  async lastIngestRun(job: IngestJob, opts: { scheduledOnly?: boolean } = { scheduledOnly: true }): Promise<IngestRunRecord | null> {
+    let q = this.supabase.from("ingest_runs").select("job, started_at, finished_at, outcome").eq("job", job);
+    if (opts.scheduledOnly) q = q.eq("trigger", "schedule");
+    const { data, error } = await q.order("started_at", { ascending: false }).limit(1).maybeSingle();
+    if (error) throw new Error(`lastIngestRun failed: ${error.message}`);
+    if (!data) return null;
+    const row = data as any;
+    return { job: row.job, startedAt: row.started_at, finishedAt: row.finished_at, outcome: row.outcome };
+  }
+
+  /**
+   * True when a product with this OFF barcode is already stored. The table
+   * has no barcode column, but OFF image URLs encode it — the same barcode
+   * under two brand strings ("sprite" / "Coca-Cola") is the same product.
+   * Throws when the lookup fails — "no duplicate" must never be the answer
+   * to an unreadable table (callers decide: the cron skips the candidate,
+   * the admin re-ingest writes nothing).
+   */
+  async hasBarcode(barcode: string, excludeId?: string): Promise<boolean> {
+    const path = offImagePath(barcode);
+    if (!path) return false;
+    let query = this.supabase.from("products").select("id").ilike("image_url", `%/images/products/${escapeLike(path)}/%`);
+    if (excludeId) query = query.neq("id", excludeId);
+    const { data, error } = await query.limit(1);
+    if (error) throw new Error(`Duplicate check (barcode) failed: ${error.message}`);
+    return !!data && data.length > 0;
+  }
+
+  /** Admin view: recent runs with counts and per-product detail. */
+  async recentIngestRuns(limit = 14): Promise<unknown[]> {
+    try {
+      const { data, error } = await this.supabase
+        .from("ingest_runs")
+        .select("*")
+        .order("started_at", { ascending: false })
+        .limit(limit);
+      return error || !data ? [] : data;
+    } catch {
+      return [];
+    }
+  }
+
+  /**
    * Near-duplicate check: same brand, name that looks like an existing
    * product (spelling variant / word order). Complements the exact
    * findByNameAndBrand match — see server/utils/nameSimilarity.ts.
    */
-  async hasSimilarProduct(name: string, brand: string): Promise<boolean> {
-    const { data, error } = await this.supabase
-      .from("products")
-      .select("name")
-      .ilike("brand", escapeLike(brand.trim()))
-      .limit(25);
-    if (error || !data) return false;
-    return data.some((row: any) => namesLookAlike(String(row.name), name));
+  async hasSimilarProduct(name: string, brand: string, excludeId?: string): Promise<boolean> {
+    // Candidates by brand PREFIX, then same-brand by normalized key: an
+    // exact brand match missed "Haldiram's" vs "Haldiram" (duplicate
+    // published). namesLookAlike still decides whether it is the same product.
+    const key = brandKey(brand);
+    const prefix = brandSearchPrefix(brand);
+    // No Latin prefix ("&Me", Devanagari brands): the old exact brand match,
+    // never "no dedup at all"
+    const pattern = prefix ? `${escapeLike(prefix)}%` : escapeLike(brand.trim());
+    if (!pattern) return false;
+    const sameBrand = (rowBrand: string) =>
+      key ? brandKey(rowBrand) === key : rowBrand.trim().toLowerCase() === brand.trim().toLowerCase();
+    let query = this.supabase.from("products").select("name, brand").ilike("brand", pattern);
+    // A product must not count as its own duplicate (admin re-ingest of a draft)
+    if (excludeId) query = query.neq("id", excludeId);
+    const { data, error } = await query.limit(200);
+    // Fail closed, like hasBarcode: an unreadable table is not "no duplicate"
+    if (error) throw new Error(`Duplicate check (similar name) failed: ${error.message}`);
+    if (!data) return false;
+    return data.some((row: any) => sameBrand(String(row.brand)) && namesLookAlike(String(row.name), name));
   }
 
   async findByNameAndBrand(name: string, brand: string): Promise<Product | null> {

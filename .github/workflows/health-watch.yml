@@ -1,9 +1,15 @@
 name: Production health watch
 
 # Daily check of the public health endpoint. Fails the run — which emails the
-# repo owner — when the API is down or the ingest cron has produced nothing
-# for 72h (catalog.stale). This replaces session-bound watchers that silently
-# expired; a dry spell in Aug 2026 went unnoticed for 3 days that way.
+# repo owner — when the API is down, when the ingest cron did not run today,
+# or when it runs but has produced no product of ANY status for 72h. This
+# replaces session-bound watchers that silently expired; a dry spell in Aug
+# 2026 went unnoticed for 3 days that way.
+#
+# Sept 2026: this watch keyed on the newest PUBLISHED product, so draft-only
+# days (the publish gates holding doubtful products — a healthy outcome)
+# failed it 5 times, while the one day nothing ran (Sep 21) was not singled
+# out. It now reads the cron's own run log (ingest_runs via .ingest).
 
 on:
   schedule:
@@ -22,12 +28,45 @@ jobs:
           STATUS=$(echo "$BODY" | jq -r '.status')
           STALE=$(echo "$BODY" | jq -r '.catalog.stale')
           LAST=$(echo "$BODY" | jq -r '.catalog.lastCreatedAt')
+          RUN_AT=$(echo "$BODY" | jq -r '.ingest.lastRunAt // empty')
+          RUN_HOURS=$(echo "$BODY" | jq -r '.ingest.hoursSinceLastRun // empty')
+          RUN_OUTCOME=$(echo "$BODY" | jq -r '.ingest.lastOutcome // empty')
+          CATALOG=$(echo "$BODY" | jq -c '.catalog // empty')
+          CATALOG_ERR=$(echo "$BODY" | jq -r '.catalog.error // empty')
+          INGEST_ERR=$(echo "$BODY" | jq -r '.ingest.error // empty')
           if [ "$STATUS" != "ok" ]; then
             echo "::error::Health status is '$STATUS' (expected ok)"
             exit 1
           fi
-          if [ "$STALE" = "true" ]; then
-            echo "::error::Ingest cron looks dry: no new product since $LAST. Check Vercel cron logs for /api/cron/daily-ingest."
+          # A failed read must never pass as "no data yet": the API answers
+          # ok while every DB call fails (e.g. a rotated service-role key not
+          # yet updated in the Vercel env).
+          if [ -z "$CATALOG" ] || [ -n "$CATALOG_ERR" ]; then
+            echo "::error::/api/health could not read the catalog — DB unreachable or credentials wrong."
             exit 1
           fi
-          echo "Healthy: last product created $LAST"
+          if [ -n "$INGEST_ERR" ]; then
+            echo "::error::/api/health could not read the cron run log (ingest_runs)."
+            exit 1
+          fi
+          # Vercel fires the cron within the 09:00 UTC hour and this watch runs
+          # at 10:43, so a last run older than 24.5h means TODAY's run never
+          # happened. (A manual dispatch in the 09:xx hour, before the day's
+          # run, can trip this — re-run after 10:00.) Skipped until the first
+          # recorded run exists.
+          if [ -n "$RUN_HOURS" ] && awk -v h="$RUN_HOURS" 'BEGIN { exit !(h > 24.5) }'; then
+            echo "::error::daily-ingest did not run today: last run $RUN_AT (${RUN_HOURS}h ago). Check the Vercel cron config and logs."
+            exit 1
+          fi
+          # The cron runs but nothing lands — no product of ANY status (drafts
+          # count: they are the gates working) for 72h.
+          if [ "$STALE" = "true" ]; then
+            echo "::error::Cron runs but no product (published or draft) since $LAST; last run outcome: ${RUN_OUTCOME:-unknown}. See recent_runs in /api/admin/cron-status."
+            exit 1
+          fi
+          # One failed run (e.g. a product abandoned at the time budget) is
+          # not an outage — flag it without failing.
+          if [ "$RUN_OUTCOME" = "error" ] || [ "$RUN_OUTCOME" = "killed" ]; then
+            echo "::warning::Last daily-ingest run ended '$RUN_OUTCOME'. See recent_runs in /api/admin/cron-status."
+          fi
+          echo "Healthy: last run ${RUN_AT:-n/a} (${RUN_OUTCOME:-no run log yet}); last product $LAST"

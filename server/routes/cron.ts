@@ -11,7 +11,11 @@ import { OpenFoodFactsService } from "../services/openFoodFactsService";
 import { AIVettingService } from "../services/aiVettingService";
 import { SupabaseStorage } from "../storage/supabaseStorage";
 import { createClient, SupabaseClient } from "@supabase/supabase-js";
-import { parseIngredients, looksGarbledIngredientName } from "../utils/ingredientParser";
+import { parseIngredients } from "../utils/ingredientParser";
+import { brandKey } from "../utils/nameSimilarity";
+import { ingestOutcome, ingestTriggerOf, type IngestJob } from "../services/ingestTelemetry";
+import { evaluatePublishGate, ingredientInputsFromAnalyses } from "../services/publishGate";
+import { analysisCacheKey } from "../utils/cacheKey";
 import type { ProductType } from "@shared/types";
 
 function offSourceToProductType(source: "food" | "beauty"): ProductType {
@@ -92,6 +96,24 @@ export function buildCronRouter(
   const router = Router();
   const offService = new OpenFoodFactsService();
 
+  // Run telemetry is fail-open end to end: not even a storage that cannot
+  // initialise (missing env) may break or hang a cron response.
+  const startRun = async (job: IngestJob, req: Request): Promise<string | null> => {
+    try {
+      return await getStorage().startIngestRun(job, ingestTriggerOf(req.headers["user-agent"]));
+    } catch (err) {
+      console.warn(`[ingest_runs] start not recorded (${job}):`, err instanceof Error ? err.message : err);
+      return null;
+    }
+  };
+  const finishRun = async (...args: Parameters<SupabaseStorage["finishIngestRun"]>): Promise<void> => {
+    try {
+      await getStorage().finishIngestRun(...args);
+    } catch (err) {
+      console.warn("[ingest_runs] finish not recorded:", err instanceof Error ? err.message : err);
+    }
+  };
+
   /**
    * GET /api/cron/daily-ingest
    * MUST be GET — Vercel cron scheduler always sends GET requests.
@@ -108,6 +130,9 @@ export function buildCronRouter(
       res.status(503).json({ error: "AI vetting service not available" });
       return;
     }
+
+    // Durable run record (ingest_runs): Vercel cron logs are ephemeral.
+    const runId = await startRun("daily-ingest", req);
 
     // 1 product per run to maximize ingredient coverage per product.
     // Cached ingredients = instant (no delay); fresh ones pay AI_CALL_DELAY_MS
@@ -133,13 +158,23 @@ export function buildCronRouter(
       // checkExists: exact match first, then near-duplicate (spelling
       // variant / word order) so the catalog never collects the same product
       // twice under slightly different OFF record names.
-      products = await offService.fetchDailyProducts(COUNT, async (name, brand) => {
-        const existing = await getStorage().findByNameAndBrand(name, brand);
-        if (existing) return true;
-        return getStorage().hasSimilarProduct(name, brand);
+      products = await offService.fetchDailyProducts(COUNT, async (name, brand, barcode) => {
+        try {
+          // Same barcode = same product, whatever the brand string says
+          if (barcode && (await getStorage().hasBarcode(barcode))) return true;
+          const existing = await getStorage().findByNameAndBrand(name, brand);
+          if (existing) return true;
+          return await getStorage().hasSimilarProduct(name, brand);
+        } catch (err) {
+          // Uniqueness unknown: skip this candidate (a later run retries it)
+          // rather than risk a duplicate or abort the whole run
+          console.warn(`[cron/daily-ingest] duplicate check failed for "${name}" — skipping:`, err instanceof Error ? err.message : err);
+          return true;
+        }
       });
     } catch (err) {
       console.error("[cron/daily-ingest] OFF fetch failed:", err);
+      await finishRun(runId, "error", {}, { error: String(err) });
       res.status(502).json({ error: "Failed to fetch from Open Food Facts", detail: String(err) });
       return;
     }
@@ -147,6 +182,7 @@ export function buildCronRouter(
     console.log(`[cron/daily-ingest] OFF returned ${products.length} products`);
 
     if (products.length === 0) {
+      await finishRun(runId, "no_candidates");
       res.json({ ingested: 0, results: [], message: "No usable products from OFF" });
       return;
     }
@@ -173,7 +209,7 @@ export function buildCronRouter(
           continue;
         }
 
-        const normalizedBrand = offProduct.brand.toLowerCase().trim();
+        const normalizedBrand = brandKey(offProduct.brand) || offProduct.brand.toLowerCase().trim();
         if (brandsAddedThisRun.has(normalizedBrand)) {
           console.log(`[cron/daily-ingest] Skip "${offProduct.name}" — brand "${offProduct.brand}" already added this run`);
           results.push({ name: offProduct.name, status: "skipped", published: false, reason: "brand already added this run" });
@@ -198,17 +234,12 @@ export function buildCronRouter(
           deadlineAt: startMs + budgetMs,
         });
 
-        const overallConfidence = analyses.reduce((sum, a) => sum + a.confidence, 0) / analyses.length;
-        const hasBanned = analyses.some((a) => a.status === "banned");
-        // Any single low-confidence ingredient (incl. verification-gate
-        // disagreements, which cap at 0.5) forces a draft — an average can't
-        // wash out one flagged verdict.
-        const hasLowConfidence = analyses.some((a) => a.confidence < 0.6);
-        // Dirty label text (OCR fragments, merged tokens) must never reach
-        // the public catalog under a "published" badge — hold for review.
-        const hasGarbledNames = analyses.some((a) => looksGarbledIngredientName(a.name));
-        const shouldPublish =
-          overallConfidence >= 0.7 && !hasBanned && !hasLowConfidence && !hasGarbledNames;
+        // One gate for the cron and the admin re-ingest (services/publishGate.ts):
+        // overall confidence >= 0.7, no banned ingredient, none below 0.6,
+        // no garbled name.
+        const gate = evaluatePublishGate(analyses, { totalParsed: ingredientNames.length });
+        const shouldPublish = gate.publish;
+        const overallConfidence = gate.overallConfidence;
 
         const createdProduct = await getStorage().create({
           name: offProduct.name,
@@ -217,15 +248,7 @@ export function buildCronRouter(
           summary: `AI-vetted via FirstPledge. ${toAnalyze.length} ingredients analyzed from ${offProduct.source === "food" ? "Open Food Facts" : "Open Beauty Facts"} (ODbL license).`,
           imageUrl: offProduct.imageUrl,
           status: shouldPublish ? "published" : "draft",
-          ingredients: analyses.map((a) => ({
-            name: a.name,
-            status: a.status,
-            rationale: a.rationale,
-            sourceUrl: a.sourceUrl || (productType === "food"
-              ? `https://fdc.nal.usda.gov/food-search?query=${encodeURIComponent(a.name)}`
-              : `https://www.ewg.org/skindeep/search/?query=${encodeURIComponent(a.name)}`),
-            isOverride: false,
-          })),
+          ingredients: ingredientInputsFromAnalyses(analyses, productType),
         });
 
         brandsAddedThisRun.add(normalizedBrand);
@@ -239,7 +262,7 @@ export function buildCronRouter(
           published: shouldPublish,
           reason: shouldPublish
             ? `confidence ${overallConfidence.toFixed(2)}`
-            : `draft — confidence ${overallConfidence.toFixed(2)}${hasBanned ? ", has banned ingredients" : ""}${hasGarbledNames ? ", garbled ingredient names need review" : ""}`,
+            : `draft — ${gate.reasons.join("; ")}`,
         });
       } catch (err) {
         console.error(`[cron/daily-ingest] Error on "${offProduct.name}":`, err);
@@ -253,6 +276,16 @@ export function buildCronRouter(
     }
 
     const totalElapsed = ((Date.now() - startMs) / 1000).toFixed(1);
+    const created = results.filter((r) => r.status !== "error" && r.status !== "skipped");
+    const counts = {
+      productsCreated: created.length,
+      published: created.filter((r) => r.published).length,
+      drafts: created.filter((r) => !r.published).length,
+      skipped: results.filter((r) => r.status === "skipped").length,
+      // e.g. a product abandoned at the deadline — invisible before this log
+      failed: results.filter((r) => r.status === "error").length,
+    };
+    await finishRun(runId, ingestOutcome(counts), counts, { results, elapsed_s: Number(totalElapsed) });
     console.log(`[cron/daily-ingest] DONE in ${totalElapsed}s — ${results.filter(r => r.published).length} published`);
 
     res.json({
@@ -286,28 +319,45 @@ export function buildCronRouter(
     }
 
     const supabase = getStaleRefreshClient(supabaseUrl, supabaseKey);
+    const runId = await startRun("refresh-stale-ingredients", req);
 
     const refreshDays = parseInt(process.env.INGREDIENT_REFRESH_DAYS ?? "30", 10);
     const cutoff = new Date(Date.now() - refreshDays * 24 * 60 * 60 * 1000).toISOString();
     const { stopAfterMs, fetchLimit } = computeRefreshBudget(process.env.CRON_BUDGET_MS);
 
-    const { data: staleRows, error } = await supabase
-      .from("ingredient_analyses")
-      .select("ingredient_name, product_type")
-      .lt("last_analyzed_at", cutoff)
-      .order("last_analyzed_at", { ascending: true })
-      .limit(fetchLimit);
-
-    if (error) {
-      console.error("[cron/refresh-stale-ingredients] DB error:", error);
-      res.status(500).json({ error: error.message });
-      return;
+    // A row whose name is not its own cache key was written under an older
+    // key scheme ("preservative-e211", now "ins 211"). Nothing reads it any
+    // more, and refreshing it only rewrites the canonical row, so it would
+    // stay the "oldest stale" row forever. Page past such rows until enough
+    // real ones are collected — a fixed over-fetch would eventually be all
+    // legacy rows and refresh nothing while reporting ok (review round 2).
+    type StaleRow = { ingredient_name: string; product_type: string };
+    const staleRows_: StaleRow[] = [];
+    const PAGE = Math.max(fetchLimit * 3, 30);
+    for (let page = 0; page < 10 && staleRows_.length < fetchLimit; page++) {
+      const { data: rows, error } = await supabase
+        .from("ingredient_analyses")
+        .select("ingredient_name, product_type")
+        .lt("last_analyzed_at", cutoff)
+        .order("last_analyzed_at", { ascending: true })
+        .range(page * PAGE, page * PAGE + PAGE - 1);
+      if (error) {
+        console.error("[cron/refresh-stale-ingredients] DB error:", error);
+        await finishRun(runId, "error", {}, { error: error.message });
+        res.status(500).json({ error: error.message });
+        return;
+      }
+      const batch = (rows ?? []) as StaleRow[];
+      for (const row of batch) {
+        if (staleRows_.length >= fetchLimit) break;
+        if (analysisCacheKey(row.ingredient_name) === row.ingredient_name) staleRows_.push(row);
+      }
+      if (batch.length < PAGE) break; // no more stale rows
     }
-
-    const staleRows_ = (staleRows ?? []) as Array<{ ingredient_name: string; product_type: string }>;
     console.log(`[cron/refresh-stale-ingredients] ${staleRows_.length} stale ingredients to refresh`);
 
     if (staleRows_.length === 0) {
+      await finishRun(runId, "ok");
       res.json({ refreshed: 0, message: "No stale ingredients" });
       return;
     }
@@ -334,6 +384,8 @@ export function buildCronRouter(
       }
     }
 
+    const refreshCounts = { refreshed: refreshed.length, failed: failed.length };
+    await finishRun(runId, ingestOutcome(refreshCounts), refreshCounts, { refreshed, failed });
     res.json({ refreshed: refreshed.length, failed: failed.length, names: refreshed });
   });
 

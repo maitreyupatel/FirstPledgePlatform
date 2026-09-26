@@ -1,5 +1,84 @@
 # IMPROVEMENTS.md — Audit Log
 
+# Session 11: additive codes, published-data repair, monitoring truth (2026-09-26)
+
+Trigger: an out-of-band health check reported that Indian labels print INS
+codes as bare numbers and the parser dropped them. Every claim was
+re-verified against the live DB and real Open Food Facts text before acting.
+PR #18 (stacked on #17); 311/311 tests, tsc clean.
+
+## [VERIFIED] Audit claims vs live data
+- Parser: confirmed and WIDER than reported. Re-parsing all 74 real labels:
+  20/45 published products missing declared additives (audit: 5/17), 16 with
+  junk names live, a published sunscreen missing its UV filters (INCI "(and)"
+  blends), 9+ code notations in the wild.
+- Ingest: daily-ingest DB activity on 23/25 September days (none Sep 13,
+  Sep 21); on Sep 17/19/23/25 the run hit its budget and abandoned the
+  product, recorded nowhere. Now visible via ingest_runs.
+- Duplicates: Haldiram pair (brand spelling) confirmed; a second class found —
+  Sprite published twice under ONE barcode ("sprite" vs "Coca-Cola").
+- Secrets (full-value SHA-256, never printed): Gemini, Google API key + CX id
+  and CRON_SECRET still equal the leaked values. Supabase + Groq rotated.
+
+## [PARSER] Rewrite + three reviews
+- Bracket scanner, one INS/E code grammar, Codex INS validation (E1.9).
+  THE RULE: unreadable text is HELD (gate → draft), never guessed or dropped.
+- Round 1 (5 lenses, every finding reproduced): 27 confirmed defects fixed.
+- Round 2: 30 confirmed (1 refuted) fixed — statement removal no longer
+  truncates later colour declarations, class brackets keep their class,
+  OCR-damaged codes held, linear-time scanning, strict nutrition-panel cut,
+  a ReDoS in the registry name match (~3x per 4 chars) replaced.
+- Pre-write review of the re-ingest endpoint: storage.update() returned null
+  WITHOUT writing on a failed read and the route reported written:true;
+  duplicate checks failed open. Fixed: every write confirmed by read-back,
+  checks fail closed (cron skips the candidate), overrides refuse (409).
+- 74-label corpus after round 2: 21 held (all genuinely damaged), 53 clean.
+- Known limit, kept deliberately: named sub-ingredients of compound
+  ingredients are not itemized (E1.10).
+
+## [DATA] Published-data repair (45 → 24 published)
+Local server on the PR branch, temp admin key, dry run first, full-row
+snapshots before/after every batch, each write verified in the DB and on
+the live site (0 mismatches).
+- 12 kept published with corrected lists, original publish dates preserved:
+  Sting (10→16 rows), Parle-G (INS 503(ii), 500(ii), 1101(ii), 472e restored),
+  Sprite, Tata Salt, Amul Butter, Tempting + Dark Soy + Protein Buttermilk,
+  Moong Dal, Dot & Key / Photostable Gold / La Shield (UV filters split out).
+- 7 unpublished — live lists demonstrably wrong (storage text, allergen
+  lines or merged fragments shown as ingredients) and current label text
+  damaged: Green chilli sauce, PROTEIN DAHL, Full Bloom Ketchup, Chocos,
+  Chocos Moons & Stars, Argan Oil & Lavender; Muesli (label truncated —
+  operator hold).
+- 2 duplicates unpublished: Sprite (brand "sprite"), Haldiram moong dal.
+- 12 unpublished by owner decision: corrected lists are complete, but the
+  gate holds each on ONE generic declaration verdict ("Spices and
+  Condiments", "Natural Flavouring Substances" score 0.2 — the model will
+  not rate an undisclosed category): Thums up, Amul Lassi, Chef's Special,
+  Crunchex, Tandoori Mayo, Greek yogurt, Amul Masti, Kissan Ketchup, Farali
+  Chivda, Saffola, Mountain Dew, Schezwan Chutney. Corrected rows are saved
+  as drafts; a deterministic verdict for generic declarations (E1.12) is
+  next, then one re-ingest republishes those that pass.
+- Operator edits (recorded per step, literal find/replace on label text):
+  Maltodectrin→Maltodextrin, Anlioxidant→Antioxidant, Flavou→Flavour,
+  SEQUESTERANTS→SEQUESTRANTS, Rice Br Oil→Rice Bran Oil, and splitting an
+  INCI list's final "and" (La Shield, Photostable Gold).
+- Not touched: Alpino (current OFF text damaged, cannot verify); the Glow &
+  Lovely draft duplicate; a THIRD Sprite draft ("Coca Cola") created today
+  by the unfixed cron on main.
+
+## [OPS] Monitoring
+- Health freshness over all statuses; ingest_runs (migrations 010/011,
+  additive, RLS default-deny) with scheduled-vs-manual trigger; watch fails
+  on a missed run (>24.5h), 72h with no product, or an unreadable DB.
+- Refresh cron pages past orphaned legacy-keyed cache rows (36 in prod).
+
+## Pending user actions
+- Merge #16 → #17 → #18. Until then the health watch keeps false-alarming
+  (main measures freshness from published products only) and the cron keeps
+  missing additives and brand/barcode duplicates.
+- Rotate GEMINI_API_KEY, GOOGLE_API_KEY (+ CX), CRON_SECRET (Vercel + .env).
+- Supabase leaked-password protection toggle.
+
 # Session 10 (cont.): Phase 1 — stop active damage (2026-08-28)
 
 Six verified fixes, each with regression tests. 153/153 tests (16 new), tsc

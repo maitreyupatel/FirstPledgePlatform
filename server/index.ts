@@ -20,6 +20,8 @@ import { AIVettingService } from "./services/aiVettingService";
 import { CitationService } from "./services/citationService";
 import { requireAuth, optionalAuth } from "./middleware/auth";
 import { buildCronRouter } from "./routes/cron";
+import { buildAdminReingestRouter } from "./routes/adminReingest";
+import { summarizeIngestRun } from "./services/ingestTelemetry";
 import { fromZodError } from "zod-validation-error";
 import {
   productCreateSchema,
@@ -184,24 +186,46 @@ app.get("/api/health", async (_req, res) => {
   // cron dry spell (the July 2026 one went unnoticed for 6 days) without
   // credentials. Product names/dates are public data. Best-effort: a DB
   // hiccup must not fail the liveness check itself.
-  let catalog:
-    | { published: number; lastCreatedAt: string | null; stale: boolean }
-    | undefined;
-  try {
-    const latest = await getStorage().list({ includeUnpublished: false, limit: 1 });
-    const count = await getStorage().countProductsAfter("1970-01-01T00:00:00Z");
-    const lastCreatedAt = latest[0]?.createdAt ?? null;
-    // stale=true after 72h without a new product — computed server-side so a
-    // plain keyword monitor can alert on '"stale":true' with no date math.
-    const stale =
-      lastCreatedAt !== null &&
-      Date.now() - new Date(lastCreatedAt).getTime() > 72 * 60 * 60 * 1000;
-    catalog = { published: count, lastCreatedAt, stale };
-  } catch {
-    catalog = undefined;
+  // Memoized 60s per instance: public + unauthenticated, and each fresh
+  // computation is 5 DB queries (E7.9).
+  const now = Date.now();
+  if (!healthMemo || now - healthMemo.at > 60_000) {
+    healthMemo = { at: now, body: await computeHealthBody(now) };
   }
-  res.json({ status: "ok", timestamp: new Date().toISOString(), catalog });
+  res.json({ status: "ok", timestamp: new Date(now).toISOString(), ...healthMemo.body });
 });
+
+let healthMemo: { at: number; body: Record<string, unknown> } | null = null;
+
+async function computeHealthBody(now: number): Promise<Record<string, unknown>> {
+  // A failed read is reported as { error: "unavailable" }, never as an
+  // absent field: "the DB is unreachable" must not look like "no run log
+  // yet" to the watch (review 2026-09-26). Liveness still answers ok.
+  let catalog: Record<string, unknown>;
+  try {
+    // Freshness over ALL statuses (E4.10): a draft is a successful ingest,
+    // so counting only published rows read draft-heavy days as an outage.
+    const f = await getStorage().catalogFreshness();
+    // stale=true after 72h with no new product of any status — computed
+    // server-side so a plain keyword monitor can alert on '"stale":true'.
+    const stale = f.lastCreatedAt !== null && now - new Date(f.lastCreatedAt).getTime() > 72 * 60 * 60 * 1000;
+    catalog = { ...f, stale };
+  } catch {
+    catalog = { error: "unavailable" };
+  }
+  // Latest daily-ingest run (ingest_runs): did the cron actually RUN, and
+  // how did it end? Outcome and timing only — run detail is admin-only.
+  // Scheduled runs only: an operator's manual run must not stand in for a
+  // missed Vercel invocation.
+  let ingest: ReturnType<typeof summarizeIngestRun> | { error: string } | null;
+  try {
+    const run = await getStorage().lastIngestRun("daily-ingest", { scheduledOnly: true });
+    ingest = run ? summarizeIngestRun(run, now) : null;
+  } catch {
+    ingest = { error: "unavailable" };
+  }
+  return { catalog, ingest };
+}
 
 // Diagnostic endpoint — dev only, do not expose in production
 app.get("/api/debug/storage", (_req, res, next) => {
@@ -638,16 +662,18 @@ app.post("/api/vet-ingredients", requireAuth, vetIngredientsLimiter, async (req,
 app.get("/api/admin/cron-status", requireAuth, async (_req, res) => {
   try {
     const storageInstance = getStorage();
-    const allProducts = await storageInstance.list({ includeUnpublished: false, limit: 500 });
+    // All statuses: a draft is a successful ingest held for review (E4.10)
+    const allProducts = await storageInstance.list({ includeUnpublished: true, limit: 2000 });
 
     const now = new Date();
-    const last7Days: Array<{ date: string; added: number }> = [];
+    const last7Days: Array<{ date: string; added: number; published: number; drafts: number }> = [];
     for (let i = 6; i >= 0; i--) {
       const d = new Date(now);
       d.setUTCDate(d.getUTCDate() - i);
       const dateStr = d.toISOString().slice(0, 10);
-      const count = allProducts.filter((p) => p.createdAt?.slice(0, 10) === dateStr).length;
-      last7Days.push({ date: dateStr, added: count });
+      const day = allProducts.filter((p) => p.createdAt?.slice(0, 10) === dateStr);
+      const published = day.filter((p) => p.status === "published").length;
+      last7Days.push({ date: dateStr, added: day.length, published, drafts: day.length - published });
     }
 
     const nextRunUTC = new Date(now);
@@ -656,9 +682,13 @@ app.get("/api/admin/cron-status", requireAuth, async (_req, res) => {
 
     res.json({
       total_products: allProducts.length,
+      published: allProducts.filter((p) => p.status === "published").length,
+      drafts: allProducts.filter((p) => p.status === "draft").length,
       last_7_days: last7Days,
       cron_schedule: "0 9 * * *",
       next_run_utc: nextRunUTC.toISOString(),
+      // Every invocation with counts, outcome and per-product reasons
+      recent_runs: await storageInstance.recentIngestRuns(14),
     });
   } catch (error) {
     console.error("Error in /api/admin/cron-status:", error);
@@ -669,6 +699,8 @@ app.get("/api/admin/cron-status", requireAuth, async (_req, res) => {
 // Cron routes — protected by CRON_SECRET, invoked by Vercel scheduler
 // Pass getStorage as a lazy getter so cron routes only init storage on first request
 app.use("/api/cron", buildCronRouter(aiVettingService, getStorage));
+// Admin: re-run a stored product through the ingest parse → analyze → gate path
+app.use("/api/admin", buildAdminReingestRouter(aiVettingService, getStorage));
 
 const assetsDirectory = path.resolve(
   __dirname,
