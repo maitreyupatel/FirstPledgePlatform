@@ -169,7 +169,9 @@ describe("lost commas are held, not glued into clean-looking names", () => {
 
   it("…and a class phrase after a group starts a new additive (Tempting 'MIXED SPICES (…) PRESERVATIVE …')", () => {
     const out = parseIngredients("Garlic Powder, MIXED SPICES (CLOVE, CINNAMON, CHILLI) PRESERVATIVE SODIUM BENZOATE (INS 211)");
-    expect(out).toEqual(["Garlic Powder", "Mixed Spices", "Preservative Sodium Benzoate INS 211"]);
+    // The spice list is disclosed, so it is itemized, never collapsed into the
+    // class (E1.12 review: the bare class would be reported as undisclosed)
+    expect(out).toEqual(["Garlic Powder", "Clove", "Cinnamon", "Chilli", "Preservative Sodium Benzoate INS 211"]);
   });
 
   it("a comma list wrapped across lines is not split at every newline", () => {

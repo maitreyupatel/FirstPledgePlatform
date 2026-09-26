@@ -10,26 +10,28 @@ import { genericDeclarationKind, genericDeclarationVerdict } from "../../server/
 import { AIVettingService, IngredientAnalysis } from "../../server/services/aiVettingService.js";
 import { analysisCacheKey } from "../../server/utils/cacheKey.js";
 import { evaluatePublishGate } from "../../server/services/publishGate";
+import { parseIngredients } from "../../server/utils/ingredientParser";
 
 describe("genericDeclarationKind — only whole declarations match", () => {
   it("flavour class declarations as printed on real labels", () => {
     for (const n of [
       "Natural Flavouring Substances",
-      "Nature Identical And Artificial Flavouring Substances",
-      "natural, nature-identical & artificial flavouring substances",
       "Flavour-natural And Nature Identical Flavouring Substances",
       "Natural And Nature Identical Flavouring Substances",
       "Natural & Nature Identical Flavouring Substances",
-      "Flavours",
+      "Nature Identical Flavouring Substance",
       "Natural Flavours",
-      "Added Flavour",
+      "Permitted Natural Flavours",
     ]) {
       expect(genericDeclarationKind(n), n).toBe("flavouring");
     }
   });
 
   it("spice class titles as printed on real labels", () => {
-    for (const n of ["Spices and Condiments", "Spices & Condiments", "spices & condiments", "Spices And Condiments", "Mixed Spices", "Spices"]) {
+    for (const n of [
+      "Spices and Condiments", "Spices & Condiments", "spices & condiments", "Spices And Condiments", "Mixed Spices", "Spices",
+      "Spice Extracts", "Spice Mix", "Mixed Spice Powder", "Natural Spices",
+    ]) {
       expect(genericDeclarationKind(n), n).toBe("spices");
     }
   });
@@ -53,6 +55,22 @@ describe("genericDeclarationKind — only whole declarations match", () => {
     }
   });
 
+  it("only what the regulation permits (review): artificial flavours need their name, type must be stated, herbs are not spices", () => {
+    for (const n of [
+      "Nature Identical And Artificial Flavouring Substances", // artificial must carry the flavour's common name
+      "natural, nature-identical & artificial flavouring substances",
+      "Artificial Flavouring Substances",
+      "Flavours", // type not stated
+      "Added Flavour",
+      "Herbs", // for supplements, herbs are the actives
+      "Mixed Herbs",
+      "Condiments",
+      "Mixed Condiments",
+    ]) {
+      expect(genericDeclarationKind(n), n).toBeNull();
+    }
+  });
+
   it("applies to food and supplements only", () => {
     expect(genericDeclarationVerdict("Natural Flavouring Substances", "food")?.status).toBe("caution");
     expect(genericDeclarationVerdict("Natural Flavouring Substances", "supplement")?.confidence).toBe(0.85);
@@ -64,7 +82,8 @@ describe("genericDeclarationKind — only whole declarations match", () => {
     expect(v.name).toBe("Spices & Condiments");
     expect(v.status).toBe("caution");
     expect(v.rationale).toMatch(/Labelling and Display Regulations, 2020/);
-    expect(v.rationale).toMatch(/not disclosed/);
+    expect(v.rationale).toMatch(/does not list the individual spices/);
+    expect(v.rationale).not.toMatch(/never their individual/); // review: overclaimed the rule
     expect(v.sourceUrl).toMatch(/^https:\/\/fssai\.gov\.in\//);
   });
 });
@@ -104,6 +123,48 @@ function buildService() {
   (service as any).sleep = sleep;
   return { service, rows, provider, store, sleep };
 }
+
+describe("parser — a declaration that lists its contents has disclosed them (review)", () => {
+  it("a spice class with a list becomes the listed spices, never the bare class", () => {
+    expect(parseIngredients("Water, MIXED SPICES (CLOVE, CINNAMON, CHILLI), Salt")).toEqual(["Water", "Clove", "Cinnamon", "Chilli", "Salt"]);
+    expect(parseIngredients("Oats, Spices and Condiments (34%) (Onions, Turmeric, Cumin)")).toEqual(["Oats", "Onions", "Turmeric", "Cumin"]);
+  });
+
+  it("a percentage is not a list: the bare class stays (undisclosed)", () => {
+    expect(parseIngredients("Milk solids, spices & condiments (1%)")).toEqual(["Milk solids", "spices & condiments"]);
+  });
+
+  it("a flavouring that names its flavour is analyzed as written, not as undisclosed", () => {
+    const names = parseIngredients("Sugar, Natural Flavouring Substances (Blueberry)");
+    expect(names).toEqual(["Sugar", "Natural Flavouring Substances - Blueberry"]);
+    expect(genericDeclarationKind(names[1])).toBeNull();
+  });
+
+  it("a note or a fused pair inside a spice list is held, never published as a spice", () => {
+    const note = parseIngredients("Salt, Spices & Condiments (Contains Mustard)");
+    expect(note.some((n) => /Mustard/.test(n) && genericDeclarationKind(n) === null)).toBe(true);
+    expect(note.filter((n) => /Mustard/.test(n)).every((n) => /\(/.test(n))).toBe(true); // held form
+    const fused = parseIngredients("SPICES & CONDIMENTS (CHILLI, CARDAMOM NUTMEG, MACE)");
+    expect(fused).toContain("Chilli");
+    expect(fused).toContain("Mace");
+    expect(fused.some((n) => /Cardamom Nutmeg\)/i.test(n))).toBe(true); // held
+    const powders = parseIngredients("Mixed Spices (Onion powder Coriander powder, Turmeric powder)");
+    expect(powders).toContain("Turmeric powder");
+    expect(powders.some((n) => /Coriander powder\)/.test(n))).toBe(true); // held, not one "spice"
+  });
+
+  it("a numeric fragment in a spice list is held, never silently dropped (corpus: Green chilli sauce)", () => {
+    const out = parseIngredients("salt, spices (cumin powder, 0,1 coriander powder)");
+    expect(out.some((n) => /\(0\)/.test(n))).toBe(true);
+  });
+
+  it("a named flavour printed in capitals reads like every other name", () => {
+    expect(parseIngredients("Sugar, Nature Identical Flavouring Substance (CHOCOLATE)")).toEqual([
+      "Sugar",
+      "Nature Identical Flavouring Substance - Chocolate",
+    ]);
+  });
+});
 
 describe("analysis pipeline — generic declarations", () => {
   it("never serves a stale 0.2 cache row, with no AI call and no pacing", async () => {

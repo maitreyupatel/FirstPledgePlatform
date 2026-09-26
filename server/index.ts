@@ -18,6 +18,7 @@ import { SupabaseStorage } from "./storage/supabaseStorage";
 import { buildSourceUrl as buildEwgSourceUrl } from "./utils/ewgUrlBuilder";
 import { AIVettingService } from "./services/aiVettingService";
 import { CitationService } from "./services/citationService";
+import { FSSAI_LABELLING_URL } from "./services/genericDeclarations";
 import { requireAuth, optionalAuth } from "./middleware/auth";
 import { buildCronRouter } from "./routes/cron";
 import { buildAdminReingestRouter } from "./routes/adminReingest";
@@ -605,7 +606,9 @@ app.post("/api/vet-ingredients", requireAuth, vetIngredientsLimiter, async (req,
           if (citationService) {
             // Only search if the URL is NOT a proper EWG ingredient page (i.e., it's a search URL or generic URL)
             const isProperEwgIngredientPage = sourceUrl.includes("ewg.org/skindeep/ingredients/") && !sourceUrl.includes("/search/");
-            if (!isProperEwgIngredientPage) {
+            // A generic-declaration verdict cites the regulation it rests on;
+            // a search hit for the class name would misattribute it
+            if (!isProperEwgIngredientPage && sourceUrl !== FSSAI_LABELLING_URL) {
               try {
                 const betterUrl = await citationService.findBestCitation(analysis.name);
                 sourceUrl = betterUrl;

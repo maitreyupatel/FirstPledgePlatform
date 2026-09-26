@@ -16,6 +16,9 @@ const stale: Row[] = [
   // oldest first, as the query orders them: 100 legacy rows (real prod
   // names, keyed today as "ins 211", "ins 1422", ...), then real ones
   ...Array.from({ length: 100 }, (_, i) => ({ ingredient_name: LEGACY[i % LEGACY.length], product_type: "food" })),
+  // generic declarations: fixed verdict, never cached — never "refreshed"
+  { ingredient_name: "spices and condiments", product_type: "food" },
+  { ingredient_name: "natural flavouring substances", product_type: "food" },
   { ingredient_name: "sugar", product_type: "food" },
   { ingredient_name: "ins 211", product_type: "food" },
   { ingredient_name: "glycerin", product_type: "cosmetic" },

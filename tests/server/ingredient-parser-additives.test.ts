@@ -122,7 +122,10 @@ describe("every notation Indian labels use for additive codes", () => {
 
   it("an ingredient merged in front of a class phrase is split off", () => {
     expect(parseIngredients("Iodised Salt Acidity Regulator-E260")).toEqual(["Iodised Salt", "Acidity Regulator E260"]);
-    expect(parseIngredients(OFF_LABELS.temptingKetchup)).toContain("Mixed Spices");
+    const tempting = parseIngredients(OFF_LABELS.temptingKetchup);
+    // "MIXED SPICES (CLOVE, CINNAMON, CHILLI)": the listed spices (E1.12)
+    expect(tempting).toEqual(expect.arrayContaining(["Garlic Powder", "Clove", "Cinnamon", "Chilli"]));
+    expect(tempting).not.toContain("Mixed Spices");
     // …but a colour's own identity is never split from it
     expect(parseIngredients("Beetroot Colour (162)")).toEqual(["Beetroot Colour INS 162"]);
   });
