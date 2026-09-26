@@ -13,6 +13,7 @@ import { SupabaseStorage } from "../storage/supabaseStorage";
 import { createClient, SupabaseClient } from "@supabase/supabase-js";
 import { parseIngredients, looksGarbledIngredientName } from "../utils/ingredientParser";
 import { brandKey } from "../utils/nameSimilarity";
+import { ingestOutcome } from "../services/ingestTelemetry";
 import type { ProductType } from "@shared/types";
 
 function offSourceToProductType(source: "food" | "beauty"): ProductType {
@@ -110,6 +111,9 @@ export function buildCronRouter(
       return;
     }
 
+    // Durable run record (ingest_runs): Vercel cron logs are ephemeral.
+    const runId = await getStorage().startIngestRun("daily-ingest");
+
     // 1 product per run to maximize ingredient coverage per product.
     // Cached ingredients = instant (no delay); fresh ones pay AI_CALL_DELAY_MS
     // pacing each (20s in production for Groq TPM), bounded by budgetMs below.
@@ -141,6 +145,7 @@ export function buildCronRouter(
       });
     } catch (err) {
       console.error("[cron/daily-ingest] OFF fetch failed:", err);
+      await getStorage().finishIngestRun(runId, "error", {}, { error: String(err) });
       res.status(502).json({ error: "Failed to fetch from Open Food Facts", detail: String(err) });
       return;
     }
@@ -148,6 +153,7 @@ export function buildCronRouter(
     console.log(`[cron/daily-ingest] OFF returned ${products.length} products`);
 
     if (products.length === 0) {
+      await getStorage().finishIngestRun(runId, "no_candidates");
       res.json({ ingested: 0, results: [], message: "No usable products from OFF" });
       return;
     }
@@ -254,6 +260,16 @@ export function buildCronRouter(
     }
 
     const totalElapsed = ((Date.now() - startMs) / 1000).toFixed(1);
+    const created = results.filter((r) => r.status !== "error" && r.status !== "skipped");
+    const counts = {
+      productsCreated: created.length,
+      published: created.filter((r) => r.published).length,
+      drafts: created.filter((r) => !r.published).length,
+      skipped: results.filter((r) => r.status === "skipped").length,
+      // e.g. a product abandoned at the deadline — invisible before this log
+      failed: results.filter((r) => r.status === "error").length,
+    };
+    await getStorage().finishIngestRun(runId, ingestOutcome(counts), counts, { results, elapsed_s: Number(totalElapsed) });
     console.log(`[cron/daily-ingest] DONE in ${totalElapsed}s — ${results.filter(r => r.published).length} published`);
 
     res.json({
@@ -287,6 +303,7 @@ export function buildCronRouter(
     }
 
     const supabase = getStaleRefreshClient(supabaseUrl, supabaseKey);
+    const runId = await getStorage().startIngestRun("refresh-stale-ingredients");
 
     const refreshDays = parseInt(process.env.INGREDIENT_REFRESH_DAYS ?? "30", 10);
     const cutoff = new Date(Date.now() - refreshDays * 24 * 60 * 60 * 1000).toISOString();
@@ -301,6 +318,7 @@ export function buildCronRouter(
 
     if (error) {
       console.error("[cron/refresh-stale-ingredients] DB error:", error);
+      await getStorage().finishIngestRun(runId, "error", {}, { error: error.message });
       res.status(500).json({ error: error.message });
       return;
     }
@@ -309,6 +327,7 @@ export function buildCronRouter(
     console.log(`[cron/refresh-stale-ingredients] ${staleRows_.length} stale ingredients to refresh`);
 
     if (staleRows_.length === 0) {
+      await getStorage().finishIngestRun(runId, "ok");
       res.json({ refreshed: 0, message: "No stale ingredients" });
       return;
     }
@@ -335,6 +354,8 @@ export function buildCronRouter(
       }
     }
 
+    const refreshCounts = { refreshed: refreshed.length, failed: failed.length };
+    await getStorage().finishIngestRun(runId, ingestOutcome(refreshCounts), refreshCounts, { refreshed, failed });
     res.json({ refreshed: refreshed.length, failed: failed.length, names: refreshed });
   });
 

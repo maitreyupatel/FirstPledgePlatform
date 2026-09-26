@@ -2,6 +2,12 @@ import { randomUUID } from "node:crypto";
 import { createClient } from "@supabase/supabase-js";
 import { namesLookAlike, brandKey, brandSearchPrefix } from "../utils/nameSimilarity.js";
 import { escapeLike } from "../utils/likeEscape.js";
+import type {
+  IngestJob,
+  IngestOutcome,
+  IngestRunCounts,
+  IngestRunRecord,
+} from "../services/ingestTelemetry.js";
 import {
   Ingredient,
   Product,
@@ -117,6 +123,116 @@ export class SupabaseStorage {
       .gte("created_at", isoDate);
     if (error) throw new Error(`countProductsAfter failed: ${error.message}`);
     return count ?? 0;
+  }
+
+  /**
+   * Catalog freshness across ALL statuses. A draft is a successful ingest —
+   * the publish gates held a doubtful product for review — so freshness
+   * measured on published rows alone read draft-heavy days as an outage
+   * (E4.10: 5 false health-watch failures in Sept 2026).
+   */
+  async catalogFreshness(): Promise<{
+    published: number;
+    drafts: number;
+    lastCreatedAt: string | null;
+    lastPublishedAt: string | null;
+  }> {
+    const newest = (status?: "published") => {
+      let q = this.supabase.from("products").select("created_at");
+      if (status) q = q.eq("status", status);
+      return q.order("created_at", { ascending: false }).limit(1).maybeSingle();
+    };
+    const count = (status: "published" | "draft") =>
+      this.supabase.from("products").select("id", { count: "exact", head: true }).eq("status", status);
+
+    const [published, drafts, lastAny, lastPublished] = await Promise.all([
+      count("published"),
+      count("draft"),
+      newest(),
+      newest("published"),
+    ]);
+    for (const r of [published, drafts, lastAny, lastPublished]) {
+      if (r.error) throw new Error(`catalogFreshness failed: ${r.error.message}`);
+    }
+    return {
+      published: published.count ?? 0,
+      drafts: drafts.count ?? 0,
+      lastCreatedAt: (lastAny.data as any)?.created_at ?? null,
+      lastPublishedAt: (lastPublished.data as any)?.created_at ?? null,
+    };
+  }
+
+  // ── Cron run telemetry (ingest_runs, migration 010) ─────────────────────
+  // Fail-open throughout: telemetry must never break or slow ingestion.
+
+  async startIngestRun(job: IngestJob): Promise<string | null> {
+    try {
+      const { data, error } = await this.supabase.from("ingest_runs").insert({ job }).select("id").single();
+      if (error) throw new Error(error.message);
+      return (data as any).id as string;
+    } catch (err) {
+      console.warn(`[ingest_runs] start not recorded (${job}):`, err instanceof Error ? err.message : err);
+      return null;
+    }
+  }
+
+  async finishIngestRun(
+    id: string | null,
+    outcome: Exclude<IngestOutcome, "running">,
+    counts: IngestRunCounts = {},
+    detail?: unknown,
+  ): Promise<void> {
+    if (!id) return;
+    try {
+      const { error } = await this.supabase
+        .from("ingest_runs")
+        .update({
+          finished_at: new Date().toISOString(),
+          outcome,
+          products_created: counts.productsCreated ?? 0,
+          published: counts.published ?? 0,
+          drafts: counts.drafts ?? 0,
+          skipped: counts.skipped ?? 0,
+          refreshed: counts.refreshed ?? 0,
+          failed: counts.failed ?? 0,
+          detail: detail ?? null,
+        })
+        .eq("id", id);
+      if (error) throw new Error(error.message);
+    } catch (err) {
+      console.warn(`[ingest_runs] finish not recorded (${id}):`, err instanceof Error ? err.message : err);
+    }
+  }
+
+  async lastIngestRun(job: IngestJob): Promise<IngestRunRecord | null> {
+    try {
+      const { data, error } = await this.supabase
+        .from("ingest_runs")
+        .select("job, started_at, finished_at, outcome")
+        .eq("job", job)
+        .order("started_at", { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      if (error || !data) return null;
+      const row = data as any;
+      return { job: row.job, startedAt: row.started_at, finishedAt: row.finished_at, outcome: row.outcome };
+    } catch {
+      return null;
+    }
+  }
+
+  /** Admin view: recent runs with counts and per-product detail. */
+  async recentIngestRuns(limit = 14): Promise<unknown[]> {
+    try {
+      const { data, error } = await this.supabase
+        .from("ingest_runs")
+        .select("*")
+        .order("started_at", { ascending: false })
+        .limit(limit);
+      return error || !data ? [] : data;
+    } catch {
+      return [];
+    }
   }
 
   /**
