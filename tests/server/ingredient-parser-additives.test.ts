@@ -14,6 +14,7 @@ import { describe, it, expect } from "vitest";
 import { parseIngredients, looksGarbledIngredientName } from "../../server/utils/ingredientParser";
 import { canonicalIngredientKey, extractAdditiveCode } from "../../server/utils/additiveCode";
 import { OFF_LABELS } from "../fixtures/offLabels";
+import { FoodSafetyService } from "../../server/services/foodSafetyService";
 
 const anyGarbled = (names: string[]) => names.some(looksGarbledIngredientName);
 
@@ -275,5 +276,57 @@ describe("canonicalIngredientKey — one cache row per additive", () => {
     expect(canonicalIngredientKey("  Sugar ")).toBe("sugar");
     expect(canonicalIngredientKey("Vitamin E 400 IU")).toBe("vitamin e 400 iu");
     expect(canonicalIngredientKey("PEG-100 Stearate")).toBe("peg-100 stearate");
+  });
+});
+
+describe("registry: every code on the audited published labels resolves to a verified identity", () => {
+  // Each parsed code must reach FoodSafetyService with an authoritative
+  // identity + status — otherwise the AI would be left to guess what
+  // "INS 445" is. Codes added 2026-09-26 were researched and independently
+  // re-verified against EFSA/JECFA/FDA/FSSAI sources.
+  const PUBLISHED = {
+    mountainDew: OFF_LABELS.mountainDew,
+    parleG: OFF_LABELS.parleG,
+    sting: OFF_LABELS.sting,
+    sprite: OFF_LABELS.sprite,
+    thumsUp: OFF_LABELS.thumsUp,
+    tandooriMayo: OFF_LABELS.tandooriMayo,
+    saffolaOats: OFF_LABELS.saffolaOats,
+    schezwanChutney: OFF_LABELS.schezwanChutney,
+    temptingKetchup: OFF_LABELS.temptingKetchup,
+  };
+
+  for (const [product, label] of Object.entries(PUBLISHED)) {
+    it(`${product}: all additive codes resolve`, async () => {
+      const service = new FoodSafetyService();
+      const coded = parseIngredients(label).filter((n) => extractAdditiveCode(n) !== null);
+      expect(coded.length).toBeGreaterThan(0);
+      for (const name of coded) {
+        const data = await service.lookupFoodIngredient(name);
+        expect({ name, found: data.found, hasStatus: data.status !== null, hasIdentity: !!data.name }).toEqual({
+          name,
+          found: true,
+          hasStatus: true,
+          hasIdentity: true,
+        });
+      }
+    });
+  }
+
+  it("Mountain Dew's previously-missing additives carry their real identities", async () => {
+    const service = new FoodSafetyService();
+    expect((await service.lookupFoodIngredient("Preservative INS 211")).name).toBe("Sodium Benzoate");
+    expect(await service.lookupFoodIngredient("Colour INS 102")).toMatchObject({ name: "Tartrazine", status: "caution" });
+    expect((await service.lookupFoodIngredient("Stabilizer INS 445")).name).toBe("Glycerol Ester of Wood Rosin (Ester Gum)");
+  });
+
+  it("new entries never introduce a 'banned' verdict for an FSSAI-permitted additive", async () => {
+    const service = new FoodSafetyService();
+    for (const code of ["445", "472e", "1101", "1100", "223", "339", "385", "386", "536", "551", "635", "150c", "160b"]) {
+      const data = await service.lookupFoodIngredient(`INS ${code}`);
+      expect(data.found).toBe(true);
+      expect(data.status).not.toBe("banned");
+      expect(data.regulatoryNotes).toMatch(/FSSAI-permitted/);
+    }
   });
 });
