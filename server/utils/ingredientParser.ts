@@ -10,20 +10,27 @@
  * Regulators (330, 331)", "Raising Agents [INS 503(ii), 500(ii)]",
  * "Stabilisers 1422, 415", "Thickener-415" — and the code is the only
  * identity the additive has. Each code becomes its own ingredient, keeping
- * the class for readability: "Acidity Regulators INS 330". A code that is
- * lost makes the published report silently incomplete (Mountain Dew lost
- * sodium benzoate and tartrazine this way) or leaves a bare class name that
- * cannot be analyzed.
+ * the class for readability: "Acidity Regulators INS 330". A lost code makes
+ * the published report silently incomplete (Mountain Dew lost sodium
+ * benzoate and tartrazine this way) or leaves a bare class name that cannot
+ * be analyzed.
+ *
+ * THE RULE: when the text cannot be read with confidence — a lost comma, a
+ * damaged or unknown code, a never-closed bracket — the output must trip
+ * looksGarbledIngredientName so the product is HELD for human review. The
+ * parser never invents a clean-looking name and never silently drops text
+ * that may be an ingredient.
  */
 
-import { canonicalIngredientKey } from "./additiveCode";
+import { CODE_PREFIX_SRC, CODE_BODY_SRC, canonicalIngredientKey, normalizeQualifier } from "./additiveCode";
+import { isKnownInsCode } from "./insCodes";
 
 /**
  * Normalize ingredient name to title case (first letter capital, rest lower).
  * Preserves established abbreviations: pH, DNA, AHA, BHA, SPF, UV, INS, etc.
  */
 function toTitleCase(s: string): string {
-  const PRESERVE_UPPER = /^(pH|DNA|AHA|BHA|BHT|BHQ|SPF|UV|UVA|UVB|RNA|EDTA|SLS|SLES|INS)$/i;
+  const PRESERVE_UPPER = /^(pH|DNA|AHA|BHA|BHT|BHQ|SPF|UV|UVA|UVB|RNA|EDTA|SLS|SLES|INS|II|III|IV)$/i;
   return s
     .split(" ")
     .map((word) => {
@@ -33,64 +40,112 @@ function toTitleCase(s: string): string {
     .join(" ");
 }
 
+// ── Parse context ────────────────────────────────────────────────────────────
+
+/** Names plus the subset that is HELD: exempt from filters, always garbled. */
+interface Ctx {
+  names: string[];
+  held: Set<string>;
+}
+
+/** Record text we could not read. The brackets guarantee looksGarbledIngredientName fires. */
+function hold(ctx: Ctx, label: string, raw: string): void {
+  const name = `${label} (${raw.replace(/[()[\]{}]/g, " ").replace(/\s+/g, " ").trim()})`.trim();
+  ctx.names.push(name);
+  ctx.held.add(name);
+}
+
 // ── Additive-code grammar ────────────────────────────────────────────────────
 
-// Sub-type qualifiers: 503(ii), 331(iii), 1100(i). A lone digit is the
-// common OCR misread of a roman numeral ("452(1)") and is accepted but dropped.
-const QUALIFIER = "i{1,3}|iv|vi{0,3}|ix|x|\\d";
-// Codex INS numbers run 100-1521; anything outside is a misread, not a code.
-const MIN_INS = 100;
-const MAX_INS = 1599;
+// Inside a declared class bracket a bare number IS a code, so the prefix is optional.
+const CODE_STICKY = new RegExp(`\\s*(?:${CODE_PREFIX_SRC})?${CODE_BODY_SRC}\\s*`, "iy");
+const SEP_STICKY = new RegExp("\\s*(?:&|\\band\\b|/)?\\s*", "iy");
 
-// One code, anchored at the current position (sticky): optional INS/E prefix,
-// 3-4 digits, optional a-f letter suffix (150d, 472e), optional qualifier.
-const CODE_STICKY = new RegExp(
-  `\\s*(?:(ins|e)\\s*-?\\s*)?(\\d{3,4})([a-f])?\\s*(?:\\(\\s*(${QUALIFIER})\\s*\\))?\\s*`,
-  "iy",
-);
-
-// Something that tried to be a code but is not a valid one ("10 (ii)" where
-// the label lost a digit). Never dropped silently — see emitAdditiveGroup.
-const CODE_LIKE = /^(?:(?:ins|e)\s*-?\s*)?\d{1,5}[a-z]?\s*(?:\([^()]*\))?$/i;
-
-/** The codes in `raw` when it consists ONLY of codes ("330", "INS 261 INS 330"). */
+/**
+ * The codes in `raw` when it consists ONLY of codes ("330", "INS 261 INS
+ * 330", "INS 1422 & INS 415"), else null. Syntax only — unknown numbers are
+ * returned too, and the caller holds them.
+ */
 function matchCodeRun(raw: string): RegExpExecArray[] | null {
   const found: RegExpExecArray[] = [];
   let pos = 0;
   while (pos < raw.length) {
+    if (found.length > 0) {
+      SEP_STICKY.lastIndex = pos;
+      const sep = SEP_STICKY.exec(raw)!;
+      pos = SEP_STICKY.lastIndex;
+      if (pos >= raw.length) {
+        if (/[&/]|and/i.test(sep[0])) return null; // "330 &" — the second code is missing
+        break;
+      }
+    }
     CODE_STICKY.lastIndex = pos;
     const m = CODE_STICKY.exec(raw);
-    if (!m || m[0].length === 0) return null;
-    const n = Number(m[2]);
-    if (n < MIN_INS || n > MAX_INS) return null;
+    if (!m || m[0].length === 0 || Number(m[2]) < 100) return null;
     found.push(m);
     pos = CODE_STICKY.lastIndex;
   }
   return found.length > 0 ? found : null;
 }
 
+const codeOf = (m: RegExpExecArray) => `${m[2]}${(m[3] ?? "").toLowerCase()}`;
+
 /** "INS 503(ii)" / "E1422" — keeps the label's E-prefix, else Indian INS style. */
 function formatCode(m: RegExpExecArray): string {
-  const [, prefix, num, letter, qualifier] = m;
-  const suffix = (letter ?? "").toLowerCase();
-  const q = qualifier && !/^\d$/.test(qualifier) ? `(${qualifier.toLowerCase()})` : "";
-  return prefix?.toLowerCase() === "e" ? `E${num}${suffix}${q}` : `INS ${num}${suffix}${q}`;
+  const q = normalizeQualifier(m[4]);
+  const body = `${codeOf(m)}${q ? `(${q})` : ""}`;
+  return m[1]?.toLowerCase() === "e" ? `E${body}` : `INS ${body}`;
 }
 
-// Unbracketed code runs after a functional class: "Stabilisers 1422, 415",
-// "ACIDITY REGULATOR - E260", "Thickener-415", "Flavour Enhancer-627 & 631".
-// These are rewritten into the bracketed form so one code path handles all.
+// Something that tried to be a code but cannot be read as a valid one:
+// "10 (ii)" (lost digit), "21l" (l for 1), "5000th". Never dropped silently.
+const CODE_LIKE = new RegExp(`^(?:${CODE_PREFIX_SRC})?\\d{1,5}(?:\\s?[a-z]{1,2})?\\s*(?:\\([^()]*\\))?$`, "i");
+
+// Unbracketed code runs after a functional class — "Stabilisers 1422, 415",
+// "ACIDITY REGULATOR - E260", "Thickener-415", "Flavour Enhancer-627 & 631" —
+// are rewritten into the bracketed form so one code path handles all.
 const CLASS_HEAD =
   "(?:regulators?|stabili[sz]ers?|thickeners?|preservatives?|colou?rs?|emulsifiers?|sweeteners?|enhancers?|agents?|antioxidants?|sequestrants?|humectants?|acidulants?|improvers?)";
-const RUN_CODE =
-  `(?:(?:ins|e)\\s*-?\\s*)?[1-9]\\d{2,3}[a-f]?(?:\\s*\\(\\s*(?:${QUALIFIER})\\s*\\))?` +
-  // not a quantity: "100 g", "150 kcal", "13 mg", "2%", "7,4" — while a
-  // comma list with no spaces ("627,631") is still a run of codes
-  `(?![\\d%]|[.,]\\d{1,2}(?!\\d)|\\s*(?:mg|g|kg|ml|l|kcal|kj|mcg|iu)\\b)`;
-const UNBRACKETED_RUN = new RegExp(
-  `\\b(${CLASS_HEAD})\\s*(?:[-–—:]\\s*)?(${RUN_CODE}(?:\\s*(?:,|&|\\band\\b|/)?\\s*${RUN_CODE})*)`,
-  "gi",
+const HEAD_BEFORE_CODE = new RegExp(`\\b${CLASS_HEAD}\\s*(?:[-–—:]\\s*)?(?=(?:${CODE_PREFIX_SRC})?\\d)`, "gi");
+// A code in running text, not a quantity: "100 g", "150 kcal", "2%", "7,4" —
+// while a comma list with no spaces ("627,631") is still a run of codes.
+const CODE_AT = new RegExp(
+  `(?:${CODE_PREFIX_SRC})?${CODE_BODY_SRC}(?![\\d%]|[.,]\\d{1,2}(?!\\d)|\\s*(?:mg|g|kg|ml|l|kcal|kj|mcg|iu)\\b)`,
+  "iy",
 );
+const RUN_SEP = new RegExp("\\s*(?:,|&|\\band\\b|/)?\\s*", "iy");
+
+/** End index of the code run starting at `pos`, or -1. Linear: one sticky step per code. */
+function consumeCodeRun(s: string, pos: number): number {
+  let end = -1;
+  let p = pos;
+  for (;;) {
+    CODE_AT.lastIndex = p;
+    const m = CODE_AT.exec(s);
+    if (!m || Number(m[2]) < 100) break;
+    end = CODE_AT.lastIndex;
+    RUN_SEP.lastIndex = end;
+    RUN_SEP.exec(s);
+    if (RUN_SEP.lastIndex === end) break;
+    p = RUN_SEP.lastIndex;
+  }
+  return end;
+}
+
+function bracketUnbracketedRuns(s: string): string {
+  let out = "";
+  let last = 0;
+  HEAD_BEFORE_CODE.lastIndex = 0;
+  for (let m = HEAD_BEFORE_CODE.exec(s); m; m = HEAD_BEFORE_CODE.exec(s)) {
+    const start = HEAD_BEFORE_CODE.lastIndex;
+    const end = consumeCodeRun(s, start);
+    if (end <= start) continue;
+    out += `${s.slice(last, m.index)}${m[0].replace(/[\s\-–—:]+$/, "")} (${s.slice(start, end).trim()})`;
+    last = end;
+    HEAD_BEFORE_CODE.lastIndex = end;
+  }
+  return out + s.slice(last);
+}
 
 // ── Bracket-aware scanning ───────────────────────────────────────────────────
 
@@ -123,6 +178,21 @@ function isLocantComma(s: string, i: number): boolean {
   return /\d/.test(s[i - 1] ?? "") && /^\d+(?:,\d+)*-[a-z]/i.test(s.slice(i + 1));
 }
 
+const ABBREVIATIONS = /^(?:subsp|ssp|spp|sp|var|vit|approx|viz|etc|incl|st|no|mfd|mfg)$/i;
+
+/** A "." that is an abbreviation or an initial ("subsp.", "L. Acidophilus"), not a sentence end. */
+function isAbbreviationDot(s: string, i: number): boolean {
+  const before = s.slice(Math.max(0, i - 24), i);
+  const word = /([a-z]+)$/i.exec(before)?.[1] ?? "";
+  if (ABBREVIATIONS.test(word)) return true;
+  if (word.length !== 1) return false;
+  // "Vitamin A. CONTAINS …" ends the ingredient; so does a following
+  // all-caps word or a declaration keyword.
+  if (/\bvitamin\s+[a-z]$/i.test(before)) return false;
+  const next = /^\s+(\S+)/.exec(s.slice(i + 1))?.[1] ?? "";
+  return !(/^[A-Z]{2,}/.test(next) || /^(?:contains|may)\b/i.test(next));
+}
+
 // Separator length at s[i] (0 = not a separator), for the ingredient list
 // itself and for the inside of an additive group. Newlines are separators
 // only in a list laid out one-ingredient-per-line; elsewhere they are line
@@ -131,31 +201,43 @@ function topLevelSeparator(s: string, i: number): number {
   const c = s[i];
   if (c === ",") return isLocantComma(s, i) ? 0 : 1;
   if (c === ";") return 1;
-  // Sentence end: "…(INS 211). CONTAINS PERMITTED…" — but not an
-  // abbreviation ("Eranda Sd. 10 mg", "delbrueckii subsp. Bulgaricus",
-  // an initial like "L. Acidophilus")
-  if (c === "." && /^\s+[A-Z]/.test(s.slice(i + 1)) && !ABBREVIATION_END.test(s.slice(0, i))) return 1;
+  // Sentence end: "…(INS 211). CONTAINS PERMITTED…"
+  if (c === "." && /^\s+[A-Z]/.test(s.slice(i + 1)) && !isAbbreviationDot(s, i)) return 1;
   return 0;
 }
-
-const ABBREVIATION_END = /(?:\b(?:subsp|ssp|spp|sp|var|vit|approx|viz|etc|incl|st|no|mfd|mfg)|(?:^|[\s.(])[a-z])$/i;
 
 function newlineListSeparator(s: string, i: number): number {
   return s[i] === "\n" ? 1 : topLevelSeparator(s, i);
 }
 
+// Inside an additive group only commas and semicolons separate pieces;
+// "&", "and" and "/" join codes ("INS 1422 & INS 415", handled by
+// matchCodeRun) or belong to names ("Mono and Diglycerides of Fatty Acids").
 function groupSeparator(s: string, i: number): number {
   const c = s[i];
   if (c === ",") return isLocantComma(s, i) ? 0 : 1;
-  if (c === ";" || c === "&" || c === "/") return 1;
-  if (/^and\b/i.test(s.slice(i)) && (i === 0 || /\s/.test(s[i - 1]))) return 3;
-  return 0;
+  return c === ";" ? 1 : 0;
 }
 
-/** One ingredient per line and no comma list: "Carrot\nLodhra Bark\nZinc Oxide". */
+/**
+ * One ingredient per line: "Carrot\nLodhra Bark\nZinc Oxide". A comma list
+ * that merely wraps across lines ("Salt, Potassium\nIodate") is not one —
+ * only the last line may carry commas.
+ */
 function isNewlineList(s: string): boolean {
-  const lines = s.split("\n").filter((line) => line.trim()).length;
-  return lines >= 3 && (s.match(/[,;]/g) ?? []).length < lines;
+  const lines = s.split("\n").filter((line) => line.trim());
+  return lines.length >= 3 && lines.slice(0, -1).every((line) => !/[,;]/.test(line));
+}
+
+/** Newlines inside brackets are always wraps — flatten them. */
+function flattenBracketNewlines(s: string): string {
+  const inside = new Array<boolean>(s.length).fill(false);
+  for (const [open, close] of Array.from(pairBrackets(s))) {
+    for (let k = open + 1; k < close; k++) inside[k] = true;
+  }
+  let out = "";
+  for (let k = 0; k < s.length; k++) out += s[k] === "\n" && inside[k] ? " " : s[k];
+  return out;
 }
 
 /** Split `s` at depth 0 into items, each a list of text/group segments. */
@@ -211,43 +293,87 @@ function withoutGroups(s: string): string {
     .join("");
 }
 
-// An allergen or facility statement ends the ingredient list; what follows
-// ("ALLERGEN ADVICE: CONTAINS WHEAT, SOY AND CELERY") is not ingredients.
-// Only honoured outside brackets. Nutrition-panel text is deliberately NOT a
+// Memo for groupHasCode, reset per parse: every emit path asks about the
+// same subtrees, and without it cost grows with nesting depth cubed.
+let hasCodeMemo = new Map<string, boolean>();
+
+/** True when a group declares additive codes (syntactically), directly or nested. */
+function groupHasCode(inner: string): boolean {
+  const memo = hasCodeMemo.get(inner);
+  if (memo !== undefined) return memo;
+  let found = false;
+  for (const piece of splitTopLevel(inner, groupSeparator)) {
+    if (matchCodeRun(rawOf(piece).trim()) || piece.some((seg) => seg.kind === "group" && groupHasCode(seg.inner))) {
+      found = true;
+      break;
+    }
+  }
+  hasCodeMemo.set(inner, found);
+  return found;
+}
+
+// Real labels nest brackets three deep at most. Anything deeper is damage
+// (or hostile input) — held, never recursed into without bound.
+const MAX_BRACKET_DEPTH = 8;
+
+function maxBracketDepth(s: string): number {
+  let depth = 0;
+  let max = 0;
+  for (const c of s) {
+    if (OPENERS.includes(c)) max = Math.max(max, ++depth);
+    else if (CLOSERS.includes(c) && depth > 0) depth--;
+  }
+  return max;
+}
+
+// ── Statements that end the list ─────────────────────────────────────────────
+
+// An allergen, facility or storage statement ends the ingredient list; so
+// does a sentence that starts "Contains …"/"May contain …" (an allergen
+// sentence — "Contains ADDED/PERMITTED …" is an additive declaration and
+// is kept). Only honoured outside brackets. Nutrition-panel text is NOT a
 // cut point: OCR bleeds it into the MIDDLE of lists, where cutting would
 // silently drop every real ingredient after it — the garbled-name gate
 // catches that bleed and holds the product instead.
 const STATEMENT_START =
-  /\b(?:allerg(?:ens?|y)(?:\s+(?:advice|information|declaration|statement))?\s*:|manufactured\s+in\s+a\s+facility)/gi;
+  /\b(?:allerg\w*(?:\s+\w+)?\s*:|manufactured\s+in\s+a\s+facility|store\s+(?:in|at|below|under)\b|keep\s+(?:refrigerated|in\s+a\s+cool)|refrigerate\s+after\s+opening|best\s+before\b)|(?:^|[.;!]\s+|\n\s*)(?:contains\s+(?!added\b|permitted\b)|may\s+contains?\b)/gi;
+const SENTENCE_HAS_CODE = new RegExp(`\\(\\s*(?:${CODE_PREFIX_SRC})?\\d{3}`, "i");
 
-function cutAtStatement(s: string): string {
+// A nutrition panel appended after the list ("TOMATO KETCHUP NUTRITIONAL
+// INFORMATION … ENERGY VALUE (kcal)") is cut only when nutrient words
+// confirm it, and from the start of its sentence/item so the panel's
+// product-name heading goes too. Headerless mid-list bleed is NOT cut.
+const NUTRITION_PANEL =
+  /n[uú]tri(?:tion|tional)\s+(?:information|facts|values?)\b(?=[\s\S]{0,200}?\b(?:energy|kcal|protein|carbohydrates?|fat)\b)/gi;
+
+function cutAtNutritionPanel(s: string): string {
   const pairs = Array.from(pairBrackets(s));
-  for (const m of Array.from(s.matchAll(STATEMENT_START))) {
+  for (const m of Array.from(s.matchAll(NUTRITION_PANEL))) {
     const at = m.index ?? 0;
-    const insideGroup = pairs.some(([open, close]) => open < at && at < close);
-    if (at > 0 && !insideGroup) return s.slice(0, at);
+    if (pairs.some(([open, close]) => open < at && at < close)) continue;
+    const before = s.slice(0, at);
+    const boundary = Math.max(before.lastIndexOf(". "), before.lastIndexOf(","), before.lastIndexOf(";"), before.lastIndexOf("\n"));
+    if (boundary > 0) return s.slice(0, boundary + 1);
   }
   return s;
 }
 
-/** True when a group declares additive codes, directly or in a nested group. */
-function groupHasCode(inner: string): boolean {
-  for (const piece of splitTopLevel(inner, groupSeparator)) {
-    if (matchCodeRun(rawOf(piece).trim())) return true;
-    if (piece.some((seg) => seg.kind === "group" && groupHasCode(seg.inner))) return true;
+function cutAtStatement(s: string): string {
+  s = cutAtNutritionPanel(s);
+  const pairs = Array.from(pairBrackets(s));
+  for (const m of Array.from(s.matchAll(STATEMENT_START))) {
+    const at = (m.index ?? 0) + (m[0].length - m[0].trimStart().length) + (/^[.;!]/.test(m[0]) ? 1 : 0);
+    if (at <= 0) continue;
+    if (pairs.some(([open, close]) => open < at && at < close)) continue;
+    // "Contains … (INS 129)" declares an additive — not an allergen sentence
+    const sentence = s.slice(at).split(/\.\s/)[0];
+    if (/^\s*(?:contains|may)/i.test(s.slice(at)) && SENTENCE_HAS_CODE.test(sentence)) continue;
+    return s.slice(0, at);
   }
-  return false;
+  return s;
 }
 
-const PERCENT_ONLY = /^\s*[\d.,]+\s*%\s*$/;
-// "added"/"permitted" are declaration boilerplate, never identity:
-// "Added Flavour" is as unanalyzable as "Flavour".
-const BARE_CLASS =
-  /^(?:(?:added|permitted)\s+)*(extracts?|flavou?rs?|colou?rs?|emulsifiers?|stabili[sz]ers?|thickeners?|preservatives?|acids?|sweeteners?|spices?)$/i;
-const ADJECTIVE_ONLY = /^(?:natural|artificial|synthetic|organic|added|permitted|nature[-\s]identical)$/i;
-const QUALIFIER_WORD = /^(?:natural|artificial|synthetic|organic|added|permitted|nature|identical|nature-identical|and|&)$/i;
-
-// ── Per-name cleanup (unchanged rules, now applied per emitted name) ─────────
+// ── Per-name cleanup (unchanged rules, applied per emitted name) ─────────────
 
 function cleanName(s: string): string {
   let clean = s.trim();
@@ -282,8 +408,8 @@ function cleanName(s: string): string {
   ) {
     clean = clean.slice(0, -1).trim();
   }
-  // Strip leading stray punctuation: "-Butylene Glycol", "'CONTAINS..."
-  clean = clean.replace(/^[\s\-–—.·'"`´]+/, "").trim();
+  // Strip leading stray punctuation: "-Butylene Glycol", "'CONTAINS...", "& Colour"
+  clean = clean.replace(/^[\s\-–—.·'"`´&,]+/, "").trim();
   // Collapse multiple spaces
   clean = clean.replace(/\s{2,}/g, " ").trim();
   // Normalize ALL-CAPS words to title case for better readability and AI analysis
@@ -299,21 +425,27 @@ function cleanName(s: string): string {
   return clean;
 }
 
+const CONNECTOR_LEAD = /^[\s,&]*(?:(?:and|with|plus)\s+)?/i;
+
 /** Class text around a code group: "and Emulsifier Of Vegetable Origin" → "Emulsifier Of Vegetable Origin". */
 function cleanClass(s: string): string {
-  const stripped = s
-    .replace(/^[\s,&]*(?:and|with|plus)\s+/i, "")
-    .replace(/(?:[\s\-–—:&,]|\s(?:and|with)\b)+$/i, "");
+  const stripped = s.replace(CONNECTOR_LEAD, "").replace(/(?:[\s\-–—:&,]|\s(?:and|with)\b)+$/i, "");
   return stripped.trim() ? cleanName(stripped) : "";
 }
+
+// ── Class vocabulary ─────────────────────────────────────────────────────────
+
+const QUALIFIERS =
+  "natural|artificial|synthetic|organic|intense|low[\\s-]calorie|non[\\s-]nutritive|nutritive|vegetable|plant[\\s-]based|nature[\\s-]identical|permitted|added|food|class\\s+ii|edible";
 
 // FSSAI functional-class phrases that open an additive declaration. When a
 // label drops the comma before one ("Iodised Salt Acidity Regulator (E260)",
 // "Mixed Spices Preservative Sodium Benzoate (INS 211)"), the text before
-// the phrase is a separate ingredient. Colours are deliberately absent:
-// "Beetroot Colour (162)" is one identity, not two ingredients.
+// the phrase is a separate ingredient. Qualifiers belong to the phrase
+// ("Artificial Sweeteners", "Vegetable Emulsifier"). Colours are
+// deliberately absent: "Beetroot Colour (162)" is one identity.
 const CLASS_PHRASE = new RegExp(
-  "\\b(?:(?:permitted|added|synthetic|food|class\\s+ii)\\s+)*(?:" +
+  `\\b(?:(?:${QUALIFIERS})\\s+)*(?:` +
     [
       "acidity\\s+regulators?",
       "anti[-\\s]?caking\\s+agents?",
@@ -341,162 +473,308 @@ const CLASS_PHRASE = new RegExp(
     ")\\b",
   "i",
 );
+const QUALIFIER_OR_CONNECTOR = new RegExp(`^(?:${QUALIFIERS}|and|&|with|of)$`, "i");
+const CLASS_PHRASE_START = new RegExp(`^\\s*${CLASS_PHRASE.source.replace(/^\\b/, "")}`, "i");
+// Plant-part / form words that continue an INCI name after its bracketed
+// common name: "Beta Vulgaris (Beet) Root Extract".
+const INCI_PART =
+  /^\s*(?:fruit|leaf|leaves|root|seed|seedcake|flower|bark|peel|kernel|nut|stem|rhizome|oil|extract|juice|water|milk|powder|starch|butter|wax|gum|resin|callus|sprout|bulb|fib(?:er|re)|pulp|shell|husk|bran|germ|protein|ferment|filtrate|cell|meristem|branch|twig|wood|herb|aerial|flour|meal|sap|tuber|cone|needle|thallus|gel|lipids?|sterols?|glycerides)\b/i;
 
 // "CONTAINS PERMITTED SYNTHETIC FOOD COLOUR (129)" is the mandatory FSSAI
 // declaration of a real additive, not an allergen disclaimer — keep the
-// additive, drop the boilerplate.
-const DECLARATION_LEAD = /^\s*(?:contains|may\s+contains?)\s+(?:(?:added|permitted)\s+)*/i;
+// additive, drop the boilerplate. With a code it is always a declaration;
+// without one, only "Contains ADDED/PERMITTED …" is.
+const DECLARATION_LEAD_CODED = /^\s*(?:contains|may\s+contains?)\s+(?:(?:added|permitted)\s+)*/i;
+const DECLARATION_LEAD = /^\s*contains\s+(?:(?:added|permitted)\s+)+/i;
+
+// "added"/"permitted" are declaration boilerplate, never identity:
+// "Added Flavour" is as unanalyzable as "Flavour".
+const BARE_CLASS =
+  /^(?:(?:added|permitted)\s+)*(extracts?|flavou?rs?|colou?rs?|emulsifiers?|stabili[sz]ers?|thickeners?|preservatives?|acids?|sweeteners?|spices?)$/i;
+// A class whose parenthetical NAMES the ingredient: "Emulsifier (Soy Lecithin)".
+const IDENTITY_CLASS = new RegExp(
+  `^(?:(?:${QUALIFIERS})\\s+)*(?:emulsifiers?|stabili[sz]ers?|thickeners?|preservatives?|acids?|sweeteners?|spices?|antioxidants?)$`,
+  "i",
+);
+// A class whose parenthetical DESCRIBES it: "Flavour (Cream)" is a cream
+// flavouring, not cream; "Colour (Caramel)" is caramel colour, not caramel.
+const DESCRIPTOR_CLASS = new RegExp(`^(?:(?:${QUALIFIERS})\\s+)*(?:flavou?rs?|flavo(?:u)?rings?|colou?rs?|extracts?)$`, "i");
+const DESCRIPTOR_STEM = /flavo|colou?r|extract/i;
+const ADJECTIVE_ONLY = /^(?:natural|artificial|synthetic|organic|added|permitted|nature[-\s]identical)$/i;
+const QUALIFIER_WORD = /^(?:natural|artificial|synthetic|organic|added|permitted|nature|identical|nature-identical|and|&)$/i;
+
+const PERCENT_ONLY = /^\s*[\d.,]+\s*%\s*$/;
+const hasWord = (s: string) => /[a-z]{3,}/i.test(s);
+
+// ── Emission ─────────────────────────────────────────────────────────────────
 
 /** Emit any ingredient merged in front of the class, return the class itself. */
-function splitClassText(text: string, out: string[]): string {
-  const declared = text.replace(DECLARATION_LEAD, "");
+function splitClassText(text: string, ctx: Ctx): string {
+  const declared = text.replace(DECLARATION_LEAD_CODED, "");
   const m = CLASS_PHRASE.exec(declared);
   if (m && m.index > 0) {
     const before = cleanClass(declared.slice(0, m.index));
-    if (before) out.push(before);
+    const words = before.split(/\s+/).filter((w) => w && !QUALIFIER_OR_CONNECTOR.test(w));
+    if (words.length > 0 && words.length <= 3) {
+      ctx.names.push(before);
+    } else if (words.length > 3) {
+      // Several ingredients glued together by lost commas — can't be split safely
+      hold(ctx, before, "merged label text");
+    }
     return cleanClass(declared.slice(m.index));
   }
   return cleanClass(declared);
 }
 
-// ── Emission ─────────────────────────────────────────────────────────────────
-
 /**
  * Emit one ingredient per code in an additive group, prefixed by its class.
  * Named pieces ("Soy Lecithin" in "Emulsifiers (Soy Lecithin, 471)") and
  * nested coded sub-ingredients are emitted too. A piece that looks like a
- * code but is not a valid one keeps its brackets, so the garbled-name gate
- * holds the product for human review instead of dropping an additive.
+ * code but is not a valid one — or a code missing from the Codex INS list —
+ * is held instead of dropped.
  */
-function emitAdditiveGroup(cls: string, inner: string, out: string[]): void {
+function emitAdditiveGroup(cls: string, inner: string, ctx: Ctx): void {
   for (const piece of splitTopLevel(inner, groupSeparator)) {
     const raw = rawOf(piece).trim();
     if (!raw || PERCENT_ONLY.test(raw)) continue;
     const codes = matchCodeRun(raw);
     if (codes) {
-      for (const m of codes) out.push(cls ? `${cls} ${formatCode(m)}` : formatCode(m));
+      for (const m of codes) {
+        if (!isKnownInsCode(codeOf(m))) hold(ctx, cls, m[0].trim());
+        else ctx.names.push(cls ? `${cls} ${formatCode(m)}` : formatCode(m));
+      }
       continue;
     }
     if (CODE_LIKE.test(raw)) {
-      out.push(`${cls} (${raw.replace(/[()]/g, " ").replace(/\s+/g, " ").trim()})`.trim());
+      hold(ctx, cls, raw);
       continue;
     }
-    emitItem(piece, out);
+    emitItem(piece, ctx);
   }
+}
+
+/**
+ * Split an item where the label lost a comma after a bracket group:
+ * - after a code group or a QUID percentage, more words start a new
+ *   ingredient ("SALT(0.9%) YEAST", "Flavour Enhancer (627) Oleoresin");
+ * - a connector ("and", "&", ",") starts a new ingredient;
+ * - after any other group (sub-ingredients, notes) it is ambiguous —
+ *   "Mixed spices (…) Salt Sugar Flavour enhancer" — so the item is held.
+ */
+function splitAfterGroups(segments: Segment[], ctx: Ctx): Segment[][] | null {
+  const parts: Segment[][] = [];
+  let cur: Segment[] = [];
+  for (let k = 0; k < segments.length; k++) {
+    const seg = segments[k];
+    const prev = cur[cur.length - 1];
+    if (seg.kind === "text" && prev?.kind === "group" && hasWord(seg.text)) {
+      // INCI puts the common name mid-name: "Zea Mays (Corn) Starch",
+      // "Aloe Barbadensis (Aloe Vera) Leaf Juice" — one ingredient
+      if (INCI_PART.test(seg.text)) {
+        cur.push(seg);
+        continue;
+      }
+      const connector = /^\s*(?:,|&|and\b|with\b|plus\b)\s*/i.exec(seg.text);
+      if (connector) {
+        parts.push(cur);
+        cur = [{ kind: "text", text: seg.text.slice(connector[0].length) }];
+        continue;
+      }
+      // After a code group or QUID the next words are a new ingredient; so
+      // are words that open an additive declaration ("…(CLOVE, CHILLI)
+      // PRESERVATIVE SODIUM BENZOATE (INS 211)").
+      if (PERCENT_ONLY.test(prev.inner) || groupHasCode(prev.inner) || CLASS_PHRASE_START.test(seg.text)) {
+        parts.push(cur);
+        cur = [seg];
+        continue;
+      }
+      hold(ctx, cleanName(withoutGroups(rawOf(segments))), "label lost a comma");
+      return null;
+    }
+    cur.push(seg);
+  }
+  parts.push(cur);
+  return parts;
 }
 
 /** Emit the ingredient(s) of one list item. */
-function emitItem(segments: Segment[], out: string[]): void {
-  const hasAdditiveGroup = segments.some((seg) => seg.kind === "group" && groupHasCode(seg.inner));
+function emitItem(input: Segment[], ctx: Ctx): void {
+  const segments = stripLead(input, DECLARATION_LEAD);
+  if (!segments.some((s) => (s.kind === "text" ? /[a-z0-9]/i.test(s.text) : true))) return;
 
-  if (!hasAdditiveGroup) {
-    let head = "";
-    const specifics: string[] = [];
-    for (let k = 0; k < segments.length; k++) {
-      const seg = segments[k];
-      if (seg.kind === "text") {
-        head += seg.text;
-        continue;
-      }
-      // A QUID percentage followed by more words means the label lost a
-      // comma: "IODISED SALT(0.9%) YEAST" is two ingredients, not one.
-      const wordsFollow = segments.slice(k + 1).some((s) => s.kind === "text" && /[a-z]/i.test(s.text));
-      if (PERCENT_ONLY.test(seg.inner) && wordsFollow) {
-        out.push(cleanName(head));
-        head = "";
-        continue;
-      }
-      if (!PERCENT_ONLY.test(seg.inner)) specifics.push(seg.inner);
-      // Sub-ingredient lists, percentages and notes are dropped as before
-      head += " ";
-    }
-    const name = cleanName(head);
-    // "Flavour (Natural Flavouring Substances)", "Emulsifier (Soy Lecithin)":
-    // the class word alone is unanalyzable and filtered, so the parenthetical
-    // IS the ingredient's identity — emit it instead of losing both.
-    if (BARE_CLASS.test(name) && specifics.length > 0) {
-      for (const inner of specifics) {
-        // "Flavours (Nature Identical & Artificial)": the parenthetical only
-        // qualifies the class — the ingredient is "… Artificial Flavours"
-        const words = withoutGroups(inner).split(/[\s,]+/).filter(Boolean);
-        if (words.length > 0 && words.every((w) => QUALIFIER_WORD.test(w))) {
-          out.push(cleanName(`${withoutGroups(inner)} ${name}`));
-          continue;
-        }
-        const pieces = splitTopLevel(inner, topLevelSeparator);
-        // "(natural, nature-identical & artificial flavouring substances)"
-        // is one description, not a list of ingredients named "natural"
-        if (pieces.some((p) => ADJECTIVE_ONLY.test(rawOf(p).trim()))) out.push(cleanName(withoutGroups(inner)));
-        else for (const piece of pieces) emitItem(piece, out);
-      }
-      return;
-    }
-    out.push(name);
+  const parts = splitAfterGroups(segments, ctx);
+  if (!parts) return; // held
+  if (parts.length > 1) {
+    for (const part of parts) emitItem(part, ctx);
     return;
   }
 
-  let cls = "";
-  for (const seg of segments) {
-    if (seg.kind === "text") {
-      cls += seg.text;
-    } else if (groupHasCode(seg.inner)) {
-      emitAdditiveGroup(splitClassText(cls, out), seg.inner, out);
-      cls = "";
-    } else {
-      cls += " ";
-    }
+  const codeAt = segments.findIndex((s) => s.kind === "group" && groupHasCode(s.inner));
+  if (codeAt === -1) {
+    emitPlainItem(segments, ctx);
+    return;
   }
-  // Text after the last code group is its own ingredient when the label
-  // dropped a comma: "Flavour Enhancer-627 & 631 Oleoresin Capsicum"
-  if (/[a-z]/i.test(cls)) out.push(cleanClass(cls));
+  // Class text = the words before the first code group (other groups there
+  // are sub-ingredients/notes and are dropped, as for any ingredient).
+  const cls = splitClassText(
+    segments.slice(0, codeAt).map((s) => (s.kind === "text" ? s.text : " ")).join(""),
+    ctx,
+  );
+  for (const seg of segments.slice(codeAt)) {
+    if (seg.kind === "group" && groupHasCode(seg.inner)) emitAdditiveGroup(cls, seg.inner, ctx);
+  }
 }
 
+function stripLead(segments: Segment[], lead: RegExp): Segment[] {
+  const first = segments[0];
+  if (first?.kind !== "text" || !lead.test(first.text)) return segments;
+  return [{ kind: "text", text: first.text.replace(lead, "") }, ...segments.slice(1)];
+}
+
+/** An item with no additive codes: a plain ingredient, possibly a class with its identity in brackets. */
+function emitPlainItem(segments: Segment[], ctx: Ctx): void {
+  let head = "";
+  const inners: string[] = [];
+  let afterGroup = false;
+  for (const seg of segments) {
+    if (seg.kind === "text") {
+      // Wordless text after a group is a stray QUID or OCR residue
+      // ("(MAIDA) 68%", "(…VANILLA)mm"), never part of the name
+      if (!afterGroup || hasWord(seg.text)) head += seg.text;
+    } else {
+      afterGroup = true;
+      if (!PERCENT_ONLY.test(seg.inner)) inners.push(seg.inner);
+      head += " "; // sub-ingredient lists, percentages and notes are dropped as before
+    }
+  }
+  const name = cleanName(head);
+  const isIdentity = IDENTITY_CLASS.test(name);
+  const isDescriptor = DESCRIPTOR_CLASS.test(name);
+  if (inners.length === 0 || !(isIdentity || isDescriptor)) {
+    ctx.names.push(name);
+    return;
+  }
+  // The class word alone is unanalyzable, so the parenthetical carries the
+  // identity: "Emulsifier (Soy Lecithin)" → "Soy Lecithin"; "Flavour (Cream)"
+  // → "Cream Flavour"; "Flavour (Natural Flavouring Substances)" as is.
+  const noun = cleanName(name.split(/\s+/).pop() ?? "").replace(/s$/i, "");
+  for (const inner of inners) {
+    const text = withoutGroups(inner).replace(/\s+/g, " ").trim();
+    const words = text.split(/[\s,]+/).filter(Boolean);
+    // "Flavours (Nature Identical & Artificial)": only qualifies the class
+    if (words.length > 0 && words.every((w) => QUALIFIER_WORD.test(w))) {
+      ctx.names.push(cleanName(`${text} ${noun}s`.replace(/ss$/i, "s")));
+      continue;
+    }
+    const pieces = splitTopLevel(inner, topLevelSeparator);
+    // "(natural, nature-identical & artificial flavouring substances)" is
+    // one description, not a list of ingredients named "natural"
+    if (pieces.some((p) => ADJECTIVE_ONLY.test(rawOf(p).trim()))) {
+      ctx.names.push(cleanName(text));
+      continue;
+    }
+    for (const piece of pieces) {
+      const raw = rawOf(piece).trim();
+      if (!raw || PERCENT_ONLY.test(raw)) continue;
+      const words3 = withoutGroups(raw);
+      if (!hasWord(words3)) {
+        // "Preservative (21l)": an unreadable code where the identity should be
+        if (/\d/.test(raw)) hold(ctx, name, raw);
+        continue;
+      }
+      if (isDescriptor) {
+        const pieceName = cleanName(words3);
+        ctx.names.push(DESCRIPTOR_STEM.test(pieceName) ? pieceName : `${pieceName} ${noun}`);
+      } else {
+        emitItem(piece, ctx);
+      }
+    }
+  }
+}
+
+const NBSP = String.fromCharCode(160);
+const WS_RUN_WITH_NEWLINE = new RegExp(`[ \\t${NBSP}]*\\n[\\s${NBSP}]*`, "g");
+const WS_RUN = new RegExp(`[ \\t${NBSP}]+`, "g");
+
+/**
+ * Parse a label into ingredient names. Never throws: the cron also calls
+ * this while SELECTING candidates, where an exception on one hostile label
+ * would drop every product after it — an unparseable label is held instead.
+ */
 export function parseIngredients(rawText: string): string[] {
+  try {
+    return parseIngredientsUnsafe(rawText);
+  } catch (err) {
+    const ctx: Ctx = { names: [], held: new Set() };
+    hold(ctx, "Label text", `could not be parsed: ${err instanceof Error ? err.name : "error"}`);
+    return ctx.names;
+  } finally {
+    hasCodeMemo = new Map();
+  }
+}
+
+function parseIngredientsUnsafe(rawText: string): string[] {
+  hasCodeMemo = new Map();
   const decoded = rawText
     .replace(/\r/g, "")
     // HTML entities leak into some OFF records; "&quot;" would split on its ";"
     .replace(/&(?:quot|#34);/gi, '"')
     .replace(/&(?:apos|#39);/gi, "'")
     .replace(/&nbsp;/gi, " ")
-    .replace(/&amp;/gi, "&");
-  const text = cutAtStatement(decoded)
-    // "NS 627": OCR dropped the I of INS
-    .replace(/\bNS\s+(?=\d{3,4}\b)/g, "INS ")
-    // Replace underscores (OFF language markup: _hazelnuts_ → hazelnuts)
-    .replace(/_/g, " ")
-    // Strip asterisks / carets (organic and footnote marks)
-    .replace(/[*^]/g, "")
-    // "lodised Salt", "lodopropynyl…": the ubiquitous OCR misread of a
-    // capital I as l. No ingredient word starts with these "lod…" stems,
-    // so the correction cannot hit a real name.
-    .replace(/\blod(?=i[sz]ed|ine|ates?\b|ides?\b|o[a-z])/gi, (m) => "I" + m.slice(1))
-    .replace(UNBRACKETED_RUN, (_m, head: string, run: string) => `${head} (${run.trim()})`);
+    .replace(/&amp;/gi, "&")
+    // Every whitespace run becomes ONE character (a newline if it had one).
+    // Adjacent \s* in the code grammar can then never backtrack over long
+    // runs — the super-linear case the review measured at seconds per label.
+    .replace(WS_RUN_WITH_NEWLINE, "\n")
+    .replace(WS_RUN, " ");
 
-  const names: string[] = [];
+  if (maxBracketDepth(decoded) > MAX_BRACKET_DEPTH) {
+    const ctx: Ctx = { names: [], held: new Set() };
+    hold(ctx, "Label text", `brackets nested deeper than ${MAX_BRACKET_DEPTH}`);
+    return ctx.names;
+  }
+  const text = bracketUnbracketedRuns(
+    cutAtStatement(decoded)
+      // "NS 627": OCR dropped the I of INS
+      .replace(/\bNS\s+(?=\d{3,4}\b)/g, "INS ")
+      // Replace underscores (OFF language markup: _hazelnuts_ → hazelnuts)
+      .replace(/_/g, " ")
+      // Strip asterisks / carets (organic and footnote marks)
+      .replace(/[*^]/g, "")
+      // "lodised Salt", "lodopropynyl…": the ubiquitous OCR misread of a
+      // capital I as l. No ingredient word starts with these "lod…" stems,
+      // so the correction cannot hit a real name.
+      .replace(/\blod(?=i[sz]ed|ine|ates?\b|ides?\b|o[a-z])/gi, (m) => "I" + m.slice(1)),
+  );
+
+  const ctx: Ctx = { names: [], held: new Set() };
   const items = isNewlineList(text)
-    ? splitTopLevel(text, newlineListSeparator)
+    ? splitTopLevel(flattenBracketNewlines(text), newlineListSeparator)
     : splitTopLevel(text.replace(/\s*\n\s*/g, " "), topLevelSeparator);
-  for (const item of items) emitItem(item, names);
+  for (const item of items) emitItem(item, ctx);
 
   const seen = new Set<string>();
-  return names.filter((s) => {
-    if (s.length < 3) return false;
-    if (s.length > 80) return false;
-    // Reject if only digits/symbols
-    if (/^[\d\s\W]+$/.test(s)) return false;
-    // Reject label disclaimers that are not ingredients:
-    // "Contains Milk", "May contain traces of nuts", "Allergy advice: ..."
-    if (/^(contains|may contains?|allergen advice|allergy advice|free from|for allergens|manufactured in)\b/i.test(s)) return false;
-    // Nutrition-panel text that OCR merged into the ingredient list
-    if (/^n[uú]tri(?:tion|tional)\b/i.test(s)) return false;
-    // Reject bare functional-class words with no ingredient identity —
-    // "extract", "flavour", "emulsifier" alone cannot be meaningfully
-    // analyzed and pollute the analysis cache with junk rows. Qualified
-    // forms ("vanilla extract", "citric acid") pass untouched.
-    if (BARE_CLASS.test(s)) return false;
+  return ctx.names.filter((s) => {
+    // Held text always survives: dropping it is exactly the silent loss the
+    // hold exists to prevent.
+    if (!ctx.held.has(s)) {
+      if (s.length < 3) return false;
+      // Reject if only digits/symbols
+      if (/^[\d\s\W]+$/.test(s)) return false;
+      // Reject label disclaimers that are not ingredients:
+      // "Contains Milk", "May contain traces of nuts", "Allergy advice: ..."
+      if (/^(contains|may contains?|allergen advice|allergy advice|free from|for allergens|manufactured in)\b/i.test(s)) return false;
+      // Nutrition-panel text that OCR merged into the ingredient list
+      if (/^n[uú]tri(?:tion|tional)\b/i.test(s)) return false;
+      // Reject bare functional-class words with no ingredient identity —
+      // "extract", "flavour", "emulsifier" alone cannot be meaningfully
+      // analyzed and pollute the analysis cache with junk rows. Qualified
+      // forms ("vanilla extract", "citric acid") pass untouched.
+      if (BARE_CLASS.test(s)) return false;
+    }
     // The same ingredient declared twice — including one additive under two
-    // wordings ("Preservative Sodium Benzoate INS 211" … "Class II
-    // Preservative INS 211") — is listed once
+    // wordings — is listed once. The key keeps sub-types apart: 500(i)
+    // sodium carbonate and 500(ii) sodium bicarbonate are both kept.
     const key = canonicalIngredientKey(s);
     if (seen.has(key)) return false;
     seen.add(key);
@@ -518,11 +796,14 @@ export function looksGarbledIngredientName(name: string): boolean {
   const n = name.trim();
   if (n.length > 60) return true;
   if (/[()[\]{}]/.test(n.replace(QUALIFIED_CODE, ""))) return true; // parser strips balanced brackets; leftovers = damage
+  if (/\s[.,;:]/.test(n)) return true; // floating punctuation ("Flakes . Garlic")
+  if (/[-&/]\s*$/.test(n) || /^[&,]/.test(n)) return true; // dangling connector ("Anti caking agent -")
+  if (/\s{2,}|\n/.test(n)) return true;
   // A quantity or decimal figure is nutrition-panel bleed, not a name:
   // "Iron 1000.0 700.0 6.90 4.83 Wheat gluten"
   if (/\b\d+(?:[.,]\d+)?\s?(?:mg|g|kg|ml|kcal|kj|mcg)\b/i.test(n) || /\b\d+\.\d+\b/.test(n)) return true;
-  if (/\s[.,;:]/.test(n)) return true; // floating punctuation ("Flakes . Garlic")
-  if (/[-&/]\s*$/.test(n)) return true; // dangling connector ("Anti caking agent -")
-  if (/\s{2,}/.test(n)) return true;
+  // The parser always ends a coded name with its code; words after the code
+  // mean a lost comma merged the next ingredient in: "INS 504 Taurine"
+  if (/\b(?:INS|E)\s?\d{3,4}[a-f]?(?:\([ivx]+\))?\s+(?!and\b)[a-z]{2,}/i.test(n)) return true;
   return false;
 }

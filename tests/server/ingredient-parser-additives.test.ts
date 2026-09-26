@@ -48,6 +48,10 @@ describe("published products that lost additives — real labels", () => {
       "Milk Solids",
       "Flour Treatment Agents INS 1101(ii)",
       "Emulsifier Of Vegetable Origin INS 472e",
+      // "CONTAINS ADDED FLAVOURS (ARTIFICIAL FLAVOURING SUBSTANCE - VANILLA)mm":
+      // the mandatory flavouring declaration is an ingredient, kept — and
+      // the OCR tail "mm" is not glued onto it
+      "Artificial Flavouring Substance - Vanilla",
     ]);
     expect(anyGarbled(out)).toBe(false);
   });
@@ -268,8 +272,15 @@ describe("canonicalIngredientKey — one cache row per additive", () => {
     for (const n of ["Preservative INS 211", "PRESERVATIVE E211", "Preservative Sodium Benzoate INS 211", "Class II Preservative ins-211"]) {
       expect(canonicalIngredientKey(n)).toBe("ins 211");
     }
-    expect(canonicalIngredientKey("Acidity Regulators INS 331(iii)")).toBe("ins 331");
     expect(canonicalIngredientKey("Emulsifier Of Vegetable Origin INS 472e")).toBe("ins 472e");
+  });
+
+  it("keeps sub-types apart: 500(i) sodium carbonate is not 500(ii) sodium bicarbonate", () => {
+    expect(canonicalIngredientKey("Acidity Regulators INS 331(iii)")).toBe("ins 331(iii)");
+    expect(canonicalIngredientKey("Raising Agents INS 500(i)")).not.toBe(canonicalIngredientKey("Raising Agents INS 500(ii)"));
+    // …while every spelling of ONE code agrees, incl. a spaced letter
+    expect(canonicalIngredientKey("Colour INS 150 d")).toBe(canonicalIngredientKey("Colour E150d"));
+    expect(canonicalIngredientKey("Colour INS 150 d")).not.toBe(canonicalIngredientKey("Colour E 150 a"));
   });
 
   it("leaves non-coded names and vitamin doses alone", () => {

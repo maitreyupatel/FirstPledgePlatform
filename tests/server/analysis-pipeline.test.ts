@@ -210,7 +210,7 @@ describe("analysis cache — canonical keys and label wording (audit 2026-09-26,
   it("the stored cache key for a coded additive is its code", () => {
     const normalize = IngredientAnalysisService.prototype.normalizeIngredientName;
     expect(normalize.call(null, "PRESERVATIVE-E211")).toBe("ins 211");
-    expect(normalize.call(null, "Raising Agents INS 503(ii)")).toBe("ins 503");
+    expect(normalize.call(null, "Raising Agents INS 503(ii)")).toBe("ins 503(ii)"); // sub-types are distinct
     expect(normalize.call(null, " Sugar ")).toBe("sugar");
   });
 });
