@@ -139,11 +139,19 @@ export class SupabaseStorage {
     lastCreatedAt: string | null;
     lastPublishedAt: string | null;
   }> {
-    const newest = (status?: "published") => {
-      let q = this.supabase.from("products").select("created_at");
-      if (status) q = q.eq("status", status);
-      return q.order("created_at", { ascending: false }).limit(1).maybeSingle();
-    };
+    const newest = () =>
+      this.supabase.from("products").select("created_at").order("created_at", { ascending: false }).limit(1).maybeSingle();
+    // When something last went LIVE (published_at), not the creation time of
+    // the newest live product: a re-published draft is new to the catalog
+    const newestPublication = () =>
+      this.supabase
+        .from("products")
+        .select("published_at")
+        .eq("status", "published")
+        .not("published_at", "is", null)
+        .order("published_at", { ascending: false })
+        .limit(1)
+        .maybeSingle();
     const count = (status: "published" | "draft") =>
       this.supabase.from("products").select("id", { count: "exact", head: true }).eq("status", status);
 
@@ -151,7 +159,7 @@ export class SupabaseStorage {
       count("published"),
       count("draft"),
       newest(),
-      newest("published"),
+      newestPublication(),
     ]);
     for (const r of [published, drafts, lastAny, lastPublished]) {
       if (r.error) throw new Error(`catalogFreshness failed: ${r.error.message}`);
@@ -160,7 +168,7 @@ export class SupabaseStorage {
       published: published.count ?? 0,
       drafts: drafts.count ?? 0,
       lastCreatedAt: (lastAny.data as any)?.created_at ?? null,
-      lastPublishedAt: (lastPublished.data as any)?.created_at ?? null,
+      lastPublishedAt: (lastPublished.data as any)?.published_at ?? null,
     };
   }
 
@@ -290,7 +298,10 @@ export class SupabaseStorage {
       .limit(1)
       .maybeSingle();
 
-    if (error || !data) return null;
+    // Fail closed like hasBarcode / hasSimilarProduct: an unreadable table
+    // is not "no such product"
+    if (error) throw new Error(`Duplicate check (exact name) failed: ${error.message}`);
+    if (!data) return null;
     return data as unknown as Product;
   }
 

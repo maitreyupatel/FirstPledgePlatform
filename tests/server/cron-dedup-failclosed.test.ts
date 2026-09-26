@@ -41,7 +41,10 @@ describe("daily-ingest duplicate check", () => {
       .timeout(5000);
 
     expect(seen).toEqual([true]); // treated as "exists" → skipped, never created
-    expect(res.status).toBe(200);
-    expect(res.body.ingested).toBe(0);
+    // …and a run whose candidates were all skipped for that reason is an
+    // ERROR, not a dry day that passes the health watch (post-merge review)
+    expect(res.status).toBe(502);
+    expect(res.body.dedupErrors).toBe(1);
+    expect(storage.finishIngestRun).toHaveBeenCalledWith(null, "error", {}, expect.objectContaining({ error: expect.stringMatching(/duplicate check/) }));
   });
 });

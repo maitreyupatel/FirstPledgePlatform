@@ -105,3 +105,74 @@ describe("requireAuth — 403 response shape", () => {
     expect(out.statusCode).toBe(0);
   });
 });
+
+describe("admin key comparison (post-merge review 2026-09-26, E4.12)", () => {
+  it("secretsMatch is exact and length-safe", async () => {
+    vi.resetModules();
+    const { secretsMatch } = await import("../../server/middleware/auth.js");
+    expect(secretsMatch("test-admin-key", "test-admin-key")).toBe(true);
+    expect(secretsMatch("test-admin-kez", "test-admin-key")).toBe(false);
+    expect(secretsMatch("t", "test-admin-key")).toBe(false); // different length: no throw
+    expect(secretsMatch("", "test-admin-key")).toBe(false);
+  });
+
+  it("rejects a wrong key of a different length with 403, never an exception", async () => {
+    process.env.NODE_ENV = "production";
+    const requireAuth = await importFreshRequireAuth();
+    const req: any = { headers: { authorization: "Bearer x" } };
+    const { res, out } = makeRes();
+    let nextCalled = false;
+    await requireAuth(req, res, () => {
+      nextCalled = true;
+    });
+    expect(nextCalled).toBe(false);
+    expect(out.statusCode).toBe(403);
+  });
+});
+
+describe("admin re-ingest is behind the real auth middleware", () => {
+  it("no Authorization header: 401 and nothing read or written", async () => {
+    process.env.NODE_ENV = "production";
+    vi.resetModules();
+    const express = (await import("express")).default;
+    const request = (await import("supertest")).default;
+    const { buildAdminReingestRouter } = await import("../../server/routes/adminReingest.js");
+    const storage = { getById: vi.fn(), update: vi.fn() };
+    const ai = { analyzeIngredients: vi.fn() };
+    const app = express();
+    app.use(express.json());
+    app.use("/api/admin", buildAdminReingestRouter(ai as any, () => storage as any));
+
+    const res = await request(app).post("/api/admin/products/p1/reingest").send({ ingredientsText: "Sugar, Salt", apply: true });
+    expect(res.status).toBe(401);
+    const wrong = await request(app)
+      .post("/api/admin/products/p1/reingest")
+      .set("Authorization", "Bearer not-the-key")
+      .send({ ingredientsText: "Sugar, Salt", apply: true });
+    expect(wrong.status).toBe(403);
+    expect(storage.getById).not.toHaveBeenCalled();
+    expect(storage.update).not.toHaveBeenCalled();
+    expect(ai.analyzeIngredients).not.toHaveBeenCalled();
+  });
+});
+
+describe("optionalAuth — admin key compared in constant time too", () => {
+  async function importFreshOptionalAuth() {
+    vi.resetModules();
+    return (await import("../../server/middleware/auth.js")).optionalAuth;
+  }
+
+  it("the right key grants admin; a wrong key of any length grants nothing", async () => {
+    process.env.NODE_ENV = "production";
+    const optionalAuth = await importFreshOptionalAuth();
+    const run = async (token: string) => {
+      const req: any = { headers: { authorization: `Bearer ${token}` } };
+      await optionalAuth(req, {} as any, () => {});
+      return req.user?.role;
+    };
+    expect(await run("test-admin-key")).toBe("admin");
+    expect(await run("x")).toBeUndefined();
+    expect(await run("test-admin-kez")).toBeUndefined();
+  });
+});
+

@@ -155,6 +155,7 @@ export function buildCronRouter(
     const brandsAddedThisRun = new Set<string>();
 
     let products;
+    let dedupErrors = 0;
     try {
       // checkExists: exact match first, then near-duplicate (spelling
       // variant / word order) so the catalog never collects the same product
@@ -169,6 +170,7 @@ export function buildCronRouter(
         } catch (err) {
           // Uniqueness unknown: skip this candidate (a later run retries it)
           // rather than risk a duplicate or abort the whole run
+          dedupErrors++;
           console.warn(`[cron/daily-ingest] duplicate check failed for "${name}" — skipping:`, err instanceof Error ? err.message : err);
           return true;
         }
@@ -183,6 +185,13 @@ export function buildCronRouter(
     console.log(`[cron/daily-ingest] OFF returned ${products.length} products`);
 
     if (products.length === 0) {
+      // Candidates skipped because the DB could not be read is an error, not
+      // a dry day — it must not pass the health watch silently
+      if (dedupErrors > 0) {
+        await finishRun(runId, "error", {}, { error: `${dedupErrors} duplicate check(s) failed; candidates skipped` });
+        res.status(502).json({ error: "Duplicate checks failed", dedupErrors });
+        return;
+      }
       await finishRun(runId, "no_candidates");
       res.json({ ingested: 0, results: [], message: "No usable products from OFF" });
       return;
@@ -231,8 +240,11 @@ export function buildCronRouter(
 
         // Deadline: abort cleanly (product skipped, cache retained) rather
         // than letting Vercel kill the function mid-write at maxDuration.
+        // Reserve scaled to the budget: 60s in production (280s budget), 15s
+        // for the 50s default outside Vercel, which a fixed 60s would block
         const analyses = await aiVettingService.analyzeIngredients(toAnalyze, productType, {
           deadlineAt: startMs + budgetMs,
+          reserveMs: Math.min(60_000, Math.max(15_000, Math.floor(budgetMs / 4))),
         });
 
         // One gate for the cron and the admin re-ingest (services/publishGate.ts):
@@ -241,6 +253,13 @@ export function buildCronRouter(
         const gate = evaluatePublishGate(analyses, { totalParsed: ingredientNames.length });
         const shouldPublish = gate.publish;
         const overallConfidence = gate.overallConfidence;
+
+        // A create is two inserts (product row, then ingredient rows): never
+        // start one that the platform kill could cut in half. The analyses
+        // are cached, so the next run finishes this product in seconds.
+        if (Date.now() - startMs > budgetMs) {
+          throw Object.assign(new Error("Write deadline passed — product left for the next run (analyses cached)"), { deadline: true });
+        }
 
         const createdProduct = await getStorage().create({
           name: offProduct.name,
@@ -273,6 +292,9 @@ export function buildCronRouter(
           published: false,
           reason: err instanceof Error ? err.message : "unknown error",
         });
+        // Out of time: starting the next product would fire a fresh AI call
+        // straight after this one's (no pacing pause) and cannot finish anyway
+        if ((err as { deadline?: boolean } | null)?.deadline === true) break;
       }
     }
 

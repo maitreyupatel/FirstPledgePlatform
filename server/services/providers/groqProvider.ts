@@ -16,7 +16,7 @@
  * aiVettingService for pacing.
  */
 
-import Groq from "groq-sdk";
+import Groq, { APIConnectionError } from "groq-sdk";
 import type { AIProvider } from "../aiProvider";
 import type { ProductType } from "@shared/types";
 import {
@@ -37,7 +37,10 @@ export class GroqProvider implements AIProvider {
   ];
 
   constructor(apiKey: string, model: string = process.env.GROQ_MODEL || "openai/gpt-oss-120b") {
-    this.client = new Groq({ apiKey });
+    // Bounded: the SDK default (60s timeout x 3 attempts) can outlast any
+    // serverless deadline reserve; a slow call fails fast and is retried on
+    // a later run from the cache
+    this.client = new Groq({ apiKey, timeout: 30_000, maxRetries: 1 });
     this.model = model;
   }
 
@@ -86,6 +89,12 @@ export class GroqProvider implements AIProvider {
         // Account-level rate limit already retried with backoff — switching
         // models will not help, surface the structured error to the caller.
         if (error instanceof RateLimitExhaustedError) {
+          throw error;
+        }
+        // A timeout or dropped connection is not the model's fault: trying
+        // the next model only multiplies the wait (3 models x 30s x 2
+        // attempts could outlast any serverless deadline reserve)
+        if (error instanceof APIConnectionError) {
           throw error;
         }
 
