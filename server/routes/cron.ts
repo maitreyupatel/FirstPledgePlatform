@@ -12,6 +12,7 @@ import { AIVettingService } from "../services/aiVettingService";
 import { SupabaseStorage } from "../storage/supabaseStorage";
 import { createClient, SupabaseClient } from "@supabase/supabase-js";
 import { parseIngredients, looksGarbledIngredientName } from "../utils/ingredientParser";
+import { brandKey } from "../utils/nameSimilarity";
 import type { ProductType } from "@shared/types";
 
 function offSourceToProductType(source: "food" | "beauty"): ProductType {
@@ -173,7 +174,7 @@ export function buildCronRouter(
           continue;
         }
 
-        const normalizedBrand = offProduct.brand.toLowerCase().trim();
+        const normalizedBrand = brandKey(offProduct.brand) || offProduct.brand.toLowerCase().trim();
         if (brandsAddedThisRun.has(normalizedBrand)) {
           console.log(`[cron/daily-ingest] Skip "${offProduct.name}" — brand "${offProduct.brand}" already added this run`);
           results.push({ name: offProduct.name, status: "skipped", published: false, reason: "brand already added this run" });

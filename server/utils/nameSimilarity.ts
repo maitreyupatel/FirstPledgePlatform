@@ -42,6 +42,34 @@ function tokenize(name: string): string[] {
 }
 
 /**
+ * Brand identity for dedup. "Haldiram's", "Haldiram" and "HALDIRAMS" are
+ * one brand — observed live: "Moong Dal (Haldiram's)" and "Haldiram moong
+ * dal (Haldiram)" were BOTH published because dedup fetched candidates by
+ * exact brand and never compared the two. Lowercased, possessive and
+ * punctuation stripped, first significant word, trailing plural "s" folded.
+ */
+export function brandKey(brand: string): string {
+  const words = brand
+    .toLowerCase()
+    .replace(/['’`]s\b/g, "")
+    .replace(/[^a-z0-9\s]/g, "")
+    .split(/\s+/)
+    .filter((w) => w && w !== "the");
+  const first = words[0] ?? "";
+  return first.length >= 4 ? first.replace(/s$/, "") : first;
+}
+
+/**
+ * Leading letters of a brand as typed (max 4), for a LIKE prefix that
+ * fetches every spelling variant: "Hald" matches "Haldiram's" and
+ * "Haldiram". brandKey then decides which candidates are the same brand.
+ */
+export function brandSearchPrefix(brand: string): string {
+  const m = brand.trim().match(/^[a-z0-9]+/i);
+  return (m ? m[0] : "").slice(0, 4);
+}
+
+/**
  * True when two product names look like the same product: 80%+ of the
  * shorter name's tokens appear in the other (allowing one edit per token
  * for words of 5+ chars). Single-token names must match exactly — "kissan"

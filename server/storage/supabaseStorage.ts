@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { createClient } from "@supabase/supabase-js";
-import { namesLookAlike } from "../utils/nameSimilarity.js";
+import { namesLookAlike, brandKey, brandSearchPrefix } from "../utils/nameSimilarity.js";
 import { escapeLike } from "../utils/likeEscape.js";
 import {
   Ingredient,
@@ -125,13 +125,21 @@ export class SupabaseStorage {
    * findByNameAndBrand match — see server/utils/nameSimilarity.ts.
    */
   async hasSimilarProduct(name: string, brand: string): Promise<boolean> {
+    // Candidates by brand PREFIX, then same-brand by normalized key: an
+    // exact brand match missed "Haldiram's" vs "Haldiram" (duplicate
+    // published). namesLookAlike still decides whether it is the same product.
+    const key = brandKey(brand);
+    const prefix = brandSearchPrefix(brand);
+    if (!key || !prefix) return false;
     const { data, error } = await this.supabase
       .from("products")
-      .select("name")
-      .ilike("brand", escapeLike(brand.trim()))
-      .limit(25);
+      .select("name, brand")
+      .ilike("brand", `${escapeLike(prefix)}%`)
+      .limit(200);
     if (error || !data) return false;
-    return data.some((row: any) => namesLookAlike(String(row.name), name));
+    return data.some(
+      (row: any) => brandKey(String(row.brand)) === key && namesLookAlike(String(row.name), name),
+    );
   }
 
   async findByNameAndBrand(name: string, brand: string): Promise<Product | null> {
