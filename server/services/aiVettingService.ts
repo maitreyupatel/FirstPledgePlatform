@@ -11,6 +11,7 @@ import { CompoundResearchService } from "./providers/compoundResearchService";
 import { parseAdditiveCode } from "../utils/additiveCode";
 import { analysisCacheKey } from "../utils/cacheKey";
 import { looksGarbledIngredientName } from "../utils/ingredientParser";
+import { genericDeclarationVerdict } from "./genericDeclarations";
 
 export interface IngredientAnalysis {
   name: string;
@@ -116,6 +117,14 @@ export class AIVettingService {
   }
 
   async analyzeIngredient(ingredientName: string, productType: ProductType = "cosmetic"): Promise<IngredientAnalysis> {
+    // A generic label declaration has a fixed verdict (E1.12) — ahead of the
+    // cache, so a stale AI row for it (scored ~0.2) is replaced, not served
+    const generic = genericDeclarationVerdict(ingredientName, productType);
+    if (generic) {
+      await this.cacheResult(ingredientName, productType, generic);
+      return generic;
+    }
+
     // Step 0: Check permanent storage (cache key is ingredient_name + product_type)
     if (this.analysisService) {
       const storedAnalysis = await this.analysisService.getAnalysis(ingredientName, productType);
@@ -552,6 +561,7 @@ export class AIVettingService {
       const uncachedNames = ingredientNames.filter((n) => {
         const k = keyOf(n);
         if (seen.has(k)) return false;
+        if (genericDeclarationVerdict(n, productType)) return false; // fixed verdict, no AI
         seen.add(k);
         const hit = cached.get(k);
         return !(hit && (!this.analysisService || !this.analysisService.shouldRefreshAnalysis(hit)));
@@ -570,15 +580,26 @@ export class AIVettingService {
 
     const analyses: IngredientAnalysis[] = [];
 
+    const genericWritten = new Set<string>();
     for (let i = 0; i < ingredientNames.length; i++) {
       const name = ingredientNames[i];
       const cacheKey = analysisCacheKey(name);
 
       const hit = cached.get(cacheKey);
-      const isCacheHit = !!(hit && (!this.analysisService || !this.analysisService.shouldRefreshAnalysis(hit)));
+      const generic = genericDeclarationVerdict(name, productType);
+      // A generic declaration never costs an AI call, so it is never paced
+      const isCacheHit = !!generic || !!(hit && (!this.analysisService || !this.analysisService.shouldRefreshAnalysis(hit)));
 
       let analysis: IngredientAnalysis;
-      if (isCacheHit) {
+      if (generic) {
+        // Fixed verdict (E1.12), ahead of the cache: a stale AI row for it
+        // (scored ~0.2) is replaced once per key, not served
+        analysis = generic;
+        if (!genericWritten.has(cacheKey)) {
+          genericWritten.add(cacheKey);
+          await this.cacheResult(name, productType, generic);
+        }
+      } else if (isCacheHit) {
         // A hit is keyed by canonical name ("ins 211", "sugar") — possibly
         // written by a product that worded it differently. Show THIS label's
         // wording (was the lowercased key: "sugar" beside "Sugar", E4.7).
