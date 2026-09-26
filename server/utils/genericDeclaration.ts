@@ -51,3 +51,18 @@ export function genericDeclarationKind(name: string): GenericDeclarationKind | n
   }
   return null;
 }
+
+/**
+ * A flavouring declaration of ANY type, artificial included ("Nature
+ * Identical And Artificial Flavouring Substances"). Not itself a permitted
+ * undisclosed declaration: the parser uses it to keep a flavour's printed
+ * name ("(rose)", "(cola)") instead of dropping it.
+ */
+export function isFlavourDeclaration(name: string): boolean {
+  if (/\d/.test(name)) return false;
+  const words = name.toLowerCase().replace(/&/g, " and ").replace(/[^a-z]+/g, " ").trim().split(" ").filter(Boolean);
+  return (
+    words.some((w) => FLAVOUR_WORD.test(w)) &&
+    words.every((w) => FLAVOUR_WORD.test(w) || FLAVOUR_FILLER.has(w) || w === "artificial")
+  );
+}

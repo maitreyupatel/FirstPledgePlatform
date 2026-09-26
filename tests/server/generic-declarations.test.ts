@@ -158,6 +158,27 @@ describe("parser — a declaration that lists its contents has disclosed them (r
     expect(out.some((n) => /\(0\)/.test(n))).toBe(true);
   });
 
+  it("an artificial flavour keeps the name its label gives it — that name is what makes it compliant", () => {
+    expect(parseIngredients("Milk solids, nature identical and artificial flavouring substances (rose), active culture")).toEqual([
+      "Milk solids",
+      "nature identical and artificial flavouring substances - rose",
+      "active culture",
+    ]);
+    // nested inside the declaration, as Thums up prints it
+    expect(parseIngredients("sugar, flavours (natural, nature-identical & artificial (cola) flavouring substances).")).toEqual([
+      "sugar",
+      "natural, nature-identical & artificial flavouring substances - cola",
+    ]);
+  });
+
+  it("a bare flavour class qualified by a declaration is unchanged (Mountain Dew)", () => {
+    expect(parseIngredients("SUGAR, FLAVOUR (NATURAL FLAVOURING SUBSTANCES), PRESERVATIVE (211)")).toEqual([
+      "Sugar",
+      "Natural Flavouring Substances",
+      "Preservative INS 211",
+    ]);
+  });
+
   it("a named flavour printed in capitals reads like every other name", () => {
     expect(parseIngredients("Sugar, Nature Identical Flavouring Substance (CHOCOLATE)")).toEqual([
       "Sugar",

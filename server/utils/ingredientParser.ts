@@ -37,7 +37,7 @@ import {
   parseAdditiveCode,
 } from "./additiveCode";
 import { isKnownInsCode } from "./insCodes";
-import { genericDeclarationKind, type GenericDeclarationKind } from "./genericDeclaration";
+import { genericDeclarationKind, isFlavourDeclaration, type GenericDeclarationKind } from "./genericDeclaration";
 
 /**
  * Normalize ingredient name to title case (first letter capital, rest lower).
@@ -861,7 +861,11 @@ function emitPlainItem(segments: Segment[], ctx: Ctx): void {
   // collapse the list into the class name, which the analyzer would then
   // report as undisclosed (E1.12)
   const listed = inners.filter(hasWord);
-  const declared = genericDeclarationKind(name);
+  // Any flavouring declaration that states its type keeps the flavour its
+  // label names — "… Artificial Flavouring Substances (rose)" complies with
+  // FSSAI only BECAUSE it names it
+  const declared =
+    genericDeclarationKind(name) ?? (isFlavourDeclaration(name) && /natural|nature|artificial/i.test(name) ? "flavouring" : null);
   if (declared && listed.length > 0) {
     emitDisclosedDeclaration(declared, name, listed, ctx);
     return;
@@ -883,7 +887,9 @@ function emitPlainItem(segments: Segment[], ctx: Ctx): void {
     const words = text.split(/[\s,]+/).filter(Boolean);
     if (isDescriptor && words.length > 0 && words.every((w) => QUALIFIER_WORD.test(w))) {
       // "Flavours (Nature Identical & Artificial)": only qualifies the class
-      ctx.names.push(cleanName(`${text} ${noun}s`.replace(/ss$/i, "s")));
+      const described = cleanName(`${text} ${noun}s`.replace(/ss$/i, "s"));
+      const nested = nestedGroupText(inner); // "(Nature Identical & Artificial (Cream))"
+      ctx.names.push(nested ? cleanName(`${described} - ${capsToTitle(nested)}`) : described);
       emitted = true;
       continue;
     }
@@ -891,7 +897,10 @@ function emitPlainItem(segments: Segment[], ctx: Ctx): void {
     if (isDescriptor && pieces.some((p) => ADJECTIVE_ONLY.test(rawOf(p).trim()))) {
       // "(natural, nature-identical & artificial flavouring substances)" is
       // one description, not a list of ingredients named "natural"
-      ctx.names.push(cleanName(text));
+      // "(… artificial (cola) flavouring substances)": keep the named flavour
+      const described = cleanName(text);
+      const nested = nestedGroupText(inner);
+      ctx.names.push(nested && isFlavourDeclaration(described) ? cleanName(`${described} - ${capsToTitle(nested)}`) : described);
       emitted = true;
       continue;
     }
@@ -940,6 +949,19 @@ function emitPlainItem(segments: Segment[], ctx: Ctx): void {
   if (!emitted) ctx.names.push(name); // only descriptors: the class itself (bare ones are filtered)
 }
 
+/** "(CHOCOLATE)" reads like every other name; mixed case is kept as printed. */
+function capsToTitle(s: string): string {
+  return s === s.toUpperCase() ? toTitleCase(s) : s;
+}
+
+/** Word content of the groups nested inside `s`: "artificial (cola) flavouring" → "cola". */
+function nestedGroupText(s: string): string {
+  return splitTopLevel(s, () => 0)
+    .flat()
+    .flatMap((seg) => (seg.kind === "group" && hasWord(seg.inner) ? [seg.inner.replace(/\s+/g, " ").trim()] : []))
+    .join(", ");
+}
+
 // Two spice nouns fused in one list item — "CARDAMOM NUTMEG" — lost a comma
 const SPICE_NOUN =
   /^(?:cardamom|nutmeg|mace|cloves?|cinnamon|cumin|coriander|turmeric|fenugreek|fennel|ajwain|asafoetida|saffron|carom|aniseed|nigella)$/i;
@@ -952,9 +974,8 @@ const SPICE_NOUN =
  */
 function emitDisclosedDeclaration(kind: GenericDeclarationKind, name: string, inners: string[], ctx: Ctx): void {
   if (kind === "flavouring") {
-    let named = inners.map((i) => i.replace(/[()[\]{}]/g, " ").replace(/\s+/g, " ").trim()).join(", ");
-    if (named === named.toUpperCase()) named = toTitleCase(named); // "(CHOCOLATE)"
-    ctx.names.push(cleanName(`${name} - ${named}`));
+    const named = inners.map((i) => i.replace(/[()[\]{}]/g, " ").replace(/\s+/g, " ").trim()).join(", ");
+    ctx.names.push(cleanName(`${name} - ${capsToTitle(named)}`));
     return;
   }
   for (const inner of inners) {

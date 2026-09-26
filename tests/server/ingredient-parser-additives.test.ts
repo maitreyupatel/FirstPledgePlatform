@@ -185,9 +185,10 @@ describe("bracket handling", () => {
       "Natural Flavouring Substances",
     ]);
     // an adjective list is one description, not ingredients named "natural"
-    expect(parseIngredients(OFF_LABELS.thumsUp)).toContain("natural, nature-identical & artificial flavouring substances");
+    // (…and the flavour the label names is kept — E1.12)
+    expect(parseIngredients(OFF_LABELS.thumsUp)).toContain("natural, nature-identical & artificial flavouring substances - cola");
     expect(parseIngredients("Flavours (Nature Identical & Artificial (Cream))")).toEqual([
-      "Nature Identical & Artificial Flavours",
+      "Nature Identical & Artificial Flavours - Cream",
     ]);
   });
 
