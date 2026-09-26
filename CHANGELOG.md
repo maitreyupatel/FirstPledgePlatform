@@ -1,5 +1,39 @@
 # Changelog
 
+## [Unreleased] — 2026-09-26
+
+PRs #16–#19 (deployed to Production 2026-09-26, main 7ba9b05) plus the post-merge hardening PR. VERSION is still 1.1.0.0; the bump is tracked in backlog E7.6.
+
+### Security
+
+- **CI with secret scanning** — every PR and push to main runs the type check, the test suite and gitleaks (known historical leaks allowlisted by commit in `.gitleaks.toml`); a weekly full-history scan (`secret-scan-full.yml`) covers what per-PR scans cannot see.
+- **Admin API key compared in constant time**, and the 403 for a failed admin-role lookup no longer returns the raw database error outside development.
+
+### Added
+
+- **Admin re-ingest** — `POST /api/admin/products/:id/reingest` re-runs a stored product through the same parse → analyze → publish-gate path as the daily ingest; dry run by default, every write confirmed by read-back, products with admin overrides refused.
+- **Cron run log** — every cron run is recorded in `ingest_runs` (start, finish, outcome, counts, scheduled vs manual); `/api/health` reports the last scheduled daily-ingest under `ingest`, and the health watch fails when it is missing or late.
+- **Fixed, cited verdicts for generic declarations** — "Spices and Condiments", "Natural Flavouring Substances" and similar FSSAI-permitted class names get a deterministic caution verdict citing the Labelling & Display Regulations 2020 instead of a low-confidence model guess that held whole products.
+- **26 verified INS codes** found on real Indian labels added to the additive registry.
+
+### Changed
+
+- **Health freshness counts every product, not just published ones** — draft-only days (the publish gates working) no longer read as an outage; failed reads report `unavailable` instead of a false "stale"; `lastPublishedAt` is when something last went live.
+- **Cron runs keep a time reserve** — in production a fresh analysis starts only with at least 60s of the 280s budget left (15s at the 50s local default), pacing never eats into that reserve, no product write starts past the budget, and Groq requests (30s, one retry; a timeout no longer hops to fallback models) and EWG fetches (10s) are bounded. Not yet a hard guarantee: a search-grounded analysis plus verification can still exceed the reserve (backlog E4.4).
+- **The public catalog is edge-cached only for anonymous visitors**; admin views are `private, no-store`.
+- **Weekly ingredient refresh uses the production time budget** (row limit and time guard derived from `CRON_BUDGET_MS` instead of a hardcoded 45s / 5 rows).
+
+### Fixed
+
+- **Additive codes printed as bare numbers are kept** — "ACIDITY REGULATORS (330, 331)" no longer loses its additives; unreadable label text is held as a draft instead of guessed or dropped, and "1,2-Hexanediol"-style names survive.
+- **Duplicates caught by brand spelling and barcode**, and duplicate checks fail closed: a database error skips the candidate instead of admitting a duplicate, and a run left with no candidate after such a failure is recorded as an error (HTTP 502) rather than 'no candidates'.
+- **Admin drafts are visible** — the default data fetcher now sends the admin's token, so the Drafts tab and draft editing work.
+- **API errors show the server's message** instead of "body stream already read".
+- **Publishing a brand-new product** creates it instead of patching `/api/products/undefined`.
+- **Scoreless EWG hits no longer inflate cosmetic confidence** past the verification and publish gates.
+- **"100%"-style names no longer act as wildcards** in duplicate lookups.
+- **Unknown `/api` paths return JSON 404** (including `/api` itself) instead of the app shell.
+
 ## [1.1.0.0] — 2026-07-24
 
 ### Security

@@ -88,7 +88,15 @@ async function run() {
     for (const offProduct of candidates) {
       if (added >= TARGET_COUNT) break;
 
-      const existing = await storage.findByNameAndBrand(offProduct.name, offProduct.brand);
+      let existing;
+      try {
+        existing = await storage.findByNameAndBrand(offProduct.name, offProduct.brand);
+      } catch (err) {
+        // Uniqueness unknown: skip the candidate (fail closed), keep the run going
+        console.warn(`  SKIP "${offProduct.name}" — duplicate check failed:`, err instanceof Error ? err.message : err);
+        skipped++;
+        continue;
+      }
       if (existing) {
         skipped++;
         continue;

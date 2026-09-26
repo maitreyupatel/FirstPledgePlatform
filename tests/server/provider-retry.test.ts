@@ -86,6 +86,7 @@ describe("isRateLimitError", () => {
 const { createMock } = vi.hoisted(() => ({ createMock: vi.fn() }));
 
 vi.mock("groq-sdk", () => ({
+  APIConnectionError: class APIConnectionError extends Error {},
   default: class MockGroq {
     chat = { completions: { create: createMock } };
     constructor(_opts: unknown) {}

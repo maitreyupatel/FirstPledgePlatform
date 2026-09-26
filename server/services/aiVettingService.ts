@@ -27,6 +27,19 @@ export interface IngredientAnalysis {
   suggestedMatches?: string[];
 }
 
+/**
+ * Thrown when a deadline-aware analysis stops before starting (or pausing
+ * toward) a fresh call it could not finish in time. `deadline` lets callers
+ * recognise it without relying on the message or on class identity.
+ */
+export class AnalysisDeadlineError extends Error {
+  readonly deadline = true;
+  constructor(done: number, total: number) {
+    super(`Analysis deadline exceeded after ${done}/${total} ingredients — retry will resume from cache`);
+    this.name = "AnalysisDeadlineError";
+  }
+}
+
 export class AIVettingService {
   private aiProvider: AIProvider | null = null;
   private ewgService: EWGService;
@@ -523,21 +536,32 @@ export class AIVettingService {
   })();
 
   /**
+   * Time a fresh analysis may still need once it starts: search-grounded
+   * research, the verification pass, a bounded retry. 15s was less than one
+   * 20s pacing pause, so production runs ended seconds from Vercel's 300s
+   * kill (post-merge review 2026-09-26).
+   */
+  static readonly FRESH_ANALYSIS_RESERVE_MS = 60_000;
+
+  /**
    * Analyze a list of ingredients. `opts.deadlineAt` (epoch ms) makes the run
-   * deadline-aware for serverless callers: before STARTING each fresh
-   * analysis, if fewer than 15s remain the whole call throws — the caller
-   * skips the product cleanly instead of being killed mid-write by the
-   * platform. Already-analyzed ingredients stay cached, so a retried product
-   * resumes further along each day (self-healing).
+   * deadline-aware for serverless callers: a fresh analysis is only STARTED
+   * with `opts.reserveMs` left (default FRESH_ANALYSIS_RESERVE_MS; a short
+   * budget passes a smaller one), and the pacing pause never runs into that
+   * reserve; otherwise the whole call throws AnalysisDeadlineError — the
+   * caller skips the product cleanly instead of being killed by the platform.
+   * Already-analyzed ingredients stay cached, so a retried product resumes
+   * further along each day (self-healing).
    */
   async analyzeIngredients(
     ingredientNames: string[],
     productType: ProductType = "cosmetic",
-    opts: { deadlineAt?: number } = {}
+    opts: { deadlineAt?: number; reserveMs?: number } = {}
   ): Promise<IngredientAnalysis[]> {
     if (ingredientNames.length === 0) return [];
-    const deadlineExceeded = () =>
-      opts.deadlineAt !== undefined && Date.now() > opts.deadlineAt - 15_000;
+    const reserveMs = opts.reserveMs ?? AIVettingService.FRESH_ANALYSIS_RESERVE_MS;
+    const deadlineExceeded = (afterMs = 0) =>
+      opts.deadlineAt !== undefined && Date.now() + afterMs > opts.deadlineAt - reserveMs;
 
     // One batched cache lookup for the entire list. Previously this was two
     // queries PER ingredient (one here, one inside analyzeIngredient) — a
@@ -601,7 +625,7 @@ export class AIVettingService {
         analysis = { ...hit!, name };
       } else {
         if (deadlineExceeded()) {
-          throw new Error(`Analysis deadline exceeded after ${analyses.length}/${ingredientNames.length} ingredients — retry will resume from cache`);
+          throw new AnalysisDeadlineError(analyses.length, ingredientNames.length);
         }
         // A coalesced or wording-neutral result carries THIS label's wording
         analysis = { ...(await this.analyzeFresh(name, productType)), name };
@@ -612,10 +636,22 @@ export class AIVettingService {
       analyses.push(analysis);
 
       // Pace fresh API calls for the provider's rate limits (see callDelayMs).
-      // Cache hits are instant and don't consume rate-limit quota.
-      const isLast = i === ingredientNames.length - 1;
-      if (!isCacheHit && !isLast) {
-        await this.sleep(this.callDelayMs);
+      // Cache hits are instant and don't consume rate-limit quota, so pause
+      // only when a later ingredient needs a fresh call — and never into the
+      // deadline reserve: if that call could not start after the pause, stop
+      // now with the budget left for the caller's writes.
+      if (!isCacheHit) {
+        const freshAhead = ingredientNames.slice(i + 1).some((n) => {
+          if (genericDeclarationVerdict(n, productType)) return false;
+          const later = cached.get(analysisCacheKey(n));
+          return !(later && (!this.analysisService || !this.analysisService.shouldRefreshAnalysis(later)));
+        });
+        if (freshAhead) {
+          if (deadlineExceeded(this.callDelayMs)) {
+            throw new AnalysisDeadlineError(analyses.length, ingredientNames.length);
+          }
+          await this.sleep(this.callDelayMs);
+        }
       }
     }
 

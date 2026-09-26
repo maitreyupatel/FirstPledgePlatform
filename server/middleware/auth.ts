@@ -8,6 +8,18 @@ dotenv.config();
 
 import { Request, Response, NextFunction } from 'express';
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
+import { createHash, timingSafeEqual } from 'node:crypto';
+
+/**
+ * Constant-time secret comparison (backlog E4.12). Hashing both sides first
+ * gives equal-length buffers, so neither the content nor the length of the
+ * admin key leaks through response timing.
+ */
+export function secretsMatch(provided: string, expected: string): boolean {
+  const a = createHash('sha256').update(provided).digest();
+  const b = createHash('sha256').update(expected).digest();
+  return timingSafeEqual(a, b);
+}
 
 const supabaseUrl = process.env.SUPABASE_URL;
 const supabaseAnonKey = process.env.SUPABASE_ANON_KEY;
@@ -102,7 +114,8 @@ export async function requireAuth(req: Request, res: Response, next: NextFunctio
             return res.status(403).json({
               error: "Forbidden",
               message: "Admin role required. Please contact an administrator.",
-              details: profileError.message
+              // Raw database errors are for local debugging only
+              ...(process.env.NODE_ENV === "development" ? { details: profileError.message } : {}),
             });
           }
 
@@ -154,7 +167,7 @@ export async function requireAuth(req: Request, res: Response, next: NextFunctio
 
   if (validApiKey) {
     console.log("   Attempting API key authentication...");
-    if (token === validApiKey) {
+    if (secretsMatch(token, validApiKey)) {
       console.log("   ✅ API key authentication successful");
       (req as any).user = {
         id: 'admin',
@@ -233,7 +246,7 @@ export async function optionalAuth(req: Request, res: Response, next: NextFuncti
 
   // Fallback to ADMIN_API_KEY only (never service role key)
   const validApiKey = ADMIN_API_KEY;
-  if (validApiKey && token === validApiKey) {
+  if (validApiKey && secretsMatch(token, validApiKey)) {
     (req as any).user = {
       id: 'admin',
       role: 'admin'

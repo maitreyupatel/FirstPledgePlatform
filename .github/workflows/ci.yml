@@ -11,8 +11,11 @@ on:
     branches: [main]
 
 concurrency:
-  group: ci-${{ github.ref }}
-  cancel-in-progress: true
+  # One group per PR (superseded pushes are cancelled) but one per COMMIT on
+  # main: a shared main group cancels any queued run when a newer one queues,
+  # which is how the merges of #16-#18 lost their main test runs on 2026-09-26
+  group: ci-${{ github.event_name == 'pull_request' && github.ref || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   build:
@@ -41,9 +44,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          # Full history so the scan covers every commit on the branch, not
-          # just the tip. Known historical leaks are allowlisted by commit SHA
-          # in .gitleaks.toml — anything NEW fails the run.
+          # Full history is fetched, but the action scans only the PR's
+          # commits on pull_request, and on a push to main it scans the pushed
+          # range with --no-merges --first-parent — which is EMPTY for a merge
+          # commit. PR runs are the real gate; secret-scan-full.yml sweeps the
+          # whole history weekly. Known historical leaks are allowlisted by
+          # commit SHA in .gitleaks.toml — anything NEW fails the run.
           fetch-depth: 0
 
       - name: gitleaks

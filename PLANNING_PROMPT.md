@@ -13,14 +13,16 @@ verification of every change, and zero regressions.
 
 ## Step zero — security incident (before any other work)
 
-`IMPROVEMENT_BACKLOG.md` item **E0.1**: the public repo's git history
-(commit `efeb01b`) contains a real `.env`; the leaked
-`SUPABASE_SERVICE_ROLE_KEY` and `GEMINI_API_KEY` are still the live keys.
-Ask me to rotate them in the Supabase/Google dashboards (you never rotate
-secrets yourself), then update local `.env` + Vercel env, redeploy, and
-verify: `/api/health`, one product detail, one local cron run. Add gitleaks
-to CI in your first phase so this class cannot recur. Until rotation
-happens, treat the DB as potentially world-writable — do not defer this.
+`IMPROVEMENT_BACKLOG.md` **E0.1/E0.2**: the public repo's history leaked
+secrets (commits `efeb01b`, `e588cc1d`). The live Supabase project and Groq key differ from the leaked values, but the leaked service-role key belongs to an OLD Supabase project (URL prefix `ilsw…`) — ask me to confirm that project is deleted or its keys revoked (backlog User action 7). `GEMINI_API_KEY`, `GOOGLE_API_KEY`/`GOOGLE_CX_ID` and `CRON_SECRET`
+still equal the leaked values (re-verified 2026-09-26). Ask me to rotate
+those (you never rotate secrets yourself), then update local `.env` + Vercel
+env, redeploy, and verify `/api/health`, one product detail, one local cron
+run. gitleaks already runs in CI (PR #16, `.github/workflows/ci.yml`; the PR
+run is the gate) plus a weekly full-history scan
+(`.github/workflows/secret-scan-full.yml`) — do not re-add it. Until
+CRON_SECRET is rotated, anyone can trigger `/api/cron/*` and record a
+trigger='schedule' run (the trigger comes from the User-Agent).
 
 ## Sources of truth (read before planning)
 
@@ -28,8 +30,12 @@ happens, treat the DB as potentially world-writable — do not defer this.
   item IDs. Every item was live-verified or refutation-tested on 2026-08-27.
 - `IMPROVEMENTS.md` — session log; append an entry per work session.
 - `CLAUDE.md`, `TESTING.md` — conventions. Production:
-  https://maitreyupatel-first-pledgeplatform.vercel.app (`/api/health`
-  exposes `catalog.{published,lastCreatedAt,stale}`).
+  https://maitreyupatel-first-pledgeplatform.vercel.app (`/api/health`,
+  memoized 60s, exposes `catalog.{published,drafts,lastCreatedAt,
+  lastPublishedAt,stale}`, where stale means 72h with no product of any
+  status, and `ingest.{lastRunAt,lastOutcome,hoursSinceLastRun,stale}` for
+  the last scheduled daily-ingest; `ingest` is null until one is recorded
+  and `{error:"unavailable"}` on a failed read).
 
 ## How to work
 
@@ -38,15 +44,19 @@ happens, treat the DB as potentially world-writable — do not defer this.
    correctness → E3 honest UX → E4/E5 robustness+perf → E6 growth → E7
    process; you may re-sequence with reasons). Present the plan with
    per-phase scope, risks, and verification strategy. Wait for my approval,
-   then implement phase by phase.
+   then implement phase by phase. Phases 0–1 (E0 rotations still pending
+   me) plus E1.5/E1.7/E1.9/E1.12, E4.7, E4.10, E7.1, E7.2 are done and
+   merged (PRs #16–#19, main 7ba9b05); check the backlog's ✅/Partial
+   markers and plan from the remaining items.
 2. **Step-by-step reasoning, outcome-first reporting.** For each item: what
    you found on re-reading the code, what you changed, evidence it works
    (test counts, live probes, before/after numbers).
 3. **Read before changing. Fix causes, not symptoms. No new deps without a
    stated reason. Never weaken a test assertion to make it pass.**
-4. **Tests:** `npm test` (Vitest, 137+ must stay green) and `npm run check`
-   (tsc) after every group. New behavior → new test; bug fix → regression
-   test first. The vitest timeout is 20s for cold-import reasons — a timeout
+4. **Tests:** `npm test` (Vitest, 350+ must stay green) and `npm run check`
+   (tsc) after every group, both also enforced by CI on every PR and push
+   to main. New behavior → new test; bug fix → regression test first.
+   The vitest timeout is 20s for cold-import reasons — a timeout
    failure right after `npm install` is a cache flake; rerun before digging.
 5. **Ship discipline per change-set:** feature branch → bisectable commit →
    PR with evidence → merge → **confirm a Production deployment exists for
@@ -80,7 +90,9 @@ happens, treat the DB as potentially world-writable — do not defer this.
 - Models (verified live 2026-08-27): `openai/gpt-oss-120b` primary,
   `groq/compound-mini` grounded research, fallbacks gpt-oss-20b /
   qwen3.6-27b (qwen3.8-27b now exists).
-- `USE_SUPABASE_STORAGE=true` gates the analysis cache (undocumented — E4.11).
+- `USE_SUPABASE_STORAGE=true` gates the analysis cache (documented in
+  `.env.example`; not yet default-safe, see E4.11). `.env.example` is the
+  full env inventory.
 
 ## Hard-won operational hazards
 
@@ -96,17 +108,24 @@ happens, treat the DB as potentially world-writable — do not defer this.
   paths: (a) the app's own admin API — boot locally with a temp
   `ADMIN_API_KEY=<temp>` env, then DELETE/PATCH `/api/products/:id` with
   that bearer; (b) read-only supabase-js scripts are fine; (c) Supabase MCP
-  once I re-authorize it.
+  (authorized; SELECT freely, writes only with my approval); (d)
+  `POST /api/admin/products/:id/reingest` for ingredient-list repairs (dry
+  run by default, `apply: true` writes; dry runs still write the analysis
+  cache).
 - **Vercel:** hash deployment URLs are SSO-walled — probe only the real
   domain. Cron logs are ephemeral — verify cron behavior with a local run
   against the prod DB (same gates; creates real products, say so):
   `CRON_BUDGET_MS=120000 npx tsx server/index.ts` then
   `curl -H "Authorization: Bearer <CRON_SECRET from .env>"
-  http://localhost:3000/api/cron/daily-ingest`, plus DB evidence
-  (`ingredient_analyses.updated_at` per day).
-- Monitoring already in place: GitHub Actions `health-watch.yml` daily
-  10:43 UTC fails (→ emails owner) on non-ok health or 72h staleness. Do
-  not rely on session-bound watchers; they expire.
+  http://localhost:3000/api/cron/daily-ingest`, plus DB evidence from
+  `ingest_runs` (a local run is recorded as trigger='manual' and does NOT
+  satisfy the health watch's scheduled-run check).
+- Monitoring: GitHub Actions `health-watch.yml`, scheduled daily 10:43 UTC
+  (GitHub fires it 3–6h late), fails (→ emails owner) on non-ok health, an
+  unreadable catalog or ingest_runs, a last scheduled run >24.5h old, no
+  scheduled run recorded at all from 10:00 UTC on 2026-09-27, or 72h with no product
+  of any status; warns on a last run ending error/killed. Do not rely on
+  session-bound watchers; they expire.
 
 ## Definition of done (per item)
 

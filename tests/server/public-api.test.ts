@@ -78,3 +78,46 @@ describe("GET /api/debug/storage — production gate", () => {
     expect(res.status).toBe(404);
   });
 });
+
+describe("GET /api/products — edge caching (post-merge review 2026-09-26)", () => {
+  async function freshApp() {
+    process.env.NODE_ENV = "production";
+    process.env.SUPABASE_URL = "https://example.supabase.co";
+    process.env.SUPABASE_SERVICE_ROLE_KEY = "service-key";
+    process.env.SUPABASE_ANON_KEY = ""; // offline: no JWT verification attempt
+    process.env.ADMIN_API_KEY = "";
+    vi.resetModules();
+    return (await import("../../server/index.js")).default;
+  }
+
+  it("the anonymous public list is edge-cacheable", async () => {
+    const res = await request(await freshApp()).get("/api/products");
+    expect(res.headers["cache-control"]).toMatch(/public, s-maxage=60/);
+  });
+
+  it("the admin dashboard's URL is never cached, even when requested anonymously", async () => {
+    // an anonymous hit must not seed a published-only copy under the admin URL
+    const res = await request(await freshApp()).get("/api/products?includeUnpublished=true");
+    expect(res.headers["cache-control"]).toBe("private, no-store");
+  });
+
+  it("any request carrying credentials is never cached", async () => {
+    const res = await request(await freshApp()).get("/api/products").set("Authorization", "Bearer something");
+    expect(res.headers["cache-control"]).toBe("private, no-store");
+  });
+});
+
+describe("unmatched /api paths — JSON 404, never the app shell", () => {
+  it("covers /api itself, not only /api/*", async () => {
+    process.env.NODE_ENV = "production";
+    process.env.SUPABASE_URL = "https://example.supabase.co";
+    process.env.SUPABASE_SERVICE_ROLE_KEY = "service-key";
+    vi.resetModules();
+    const { default: app } = await import("../../server/index.js");
+    for (const path of ["/api", "/api/", "/api/nope"]) {
+      const res = await request(app).get(path);
+      expect(res.status, path).toBe(404);
+      expect(res.body.error, path).toBe("Not found");
+    }
+  });
+});

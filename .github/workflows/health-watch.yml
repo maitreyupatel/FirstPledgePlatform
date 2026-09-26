@@ -11,9 +11,12 @@ name: Production health watch
 # failed it 5 times, while the one day nothing ran (Sep 21) was not singled
 # out. It now reads the cron's own run log (ingest_runs via .ingest).
 
+# GitHub runs scheduled workflows late — in practice 3–6h after 10:43 — so
+# every check below is written to hold whenever in the day it fires.
+
 on:
   schedule:
-    - cron: "43 10 * * *" # daily, ~90min after the 09:00 UTC ingest cron
+    - cron: "43 10 * * *" # daily, after the 09:00 UTC ingest cron
   workflow_dispatch:
 
 jobs:
@@ -56,6 +59,15 @@ jobs:
           # recorded run exists.
           if [ -n "$RUN_HOURS" ] && awk -v h="$RUN_HOURS" 'BEGIN { exit !(h > 24.5) }'; then
             echo "::error::daily-ingest did not run today: last run $RUN_AT (${RUN_HOURS}h ago). Check the Vercel cron config and logs."
+            exit 1
+          fi
+          # The run log went live with the 2026-09-26 deploy; the first
+          # scheduled run is in the 09:00 UTC hour of 2026-09-27. From 10:00
+          # that day on, "no scheduled run recorded" is a failure (the cron
+          # never fired, its telemetry insert failed, or its user-agent stopped
+          # matching), never "no data yet".
+          if [ -z "$RUN_AT" ] && [ "$(date -u +%Y-%m-%dT%H)" \> "2026-09-27T09" ]; then
+            echo "::error::No scheduled daily-ingest run is recorded in ingest_runs. Check the Vercel cron and the '[ingest_runs] start not recorded' log line."
             exit 1
           fi
           # The cron runs but nothing lands — no product of ANY status (drafts

@@ -298,10 +298,14 @@ app.get("/api/products", optionalAuth, async (req, res) => {
     const products = await storageInstance.list({ includeUnpublished, productType: productType as any });
     console.log(`Found ${products.length} products`);
     // Public catalog is edge-cacheable: same response for every anonymous
-    // visitor; admin draft views (includeUnpublished) stay uncached.
-    if (!includeUnpublished) {
-      res.set("Cache-Control", "public, s-maxage=60, stale-while-revalidate=300");
-    }
+    // visitor. Anything that MIGHT be an admin view stays private — the edge
+    // keys on the URL, so an anonymous hit on the admin dashboard's own URL
+    // (?includeUnpublished=true) must not seed a published-only copy there.
+    const anonymousPublicView = !req.headers.authorization && req.query.includeUnpublished === undefined;
+    res.set(
+      "Cache-Control",
+      anonymousPublicView ? "public, s-maxage=60, stale-while-revalidate=300" : "private, no-store",
+    );
     res.json(products);
   } catch (error) {
     console.error("Error in /api/products:", error);
@@ -722,7 +726,7 @@ app.use(express.static(publicDir, { maxAge: "7d" }));
 // Unmatched /api/* must be JSON 404, never the SPA shell. Without this guard
 // the GET catch-all below answered 200 + index.html for any typo'd API path —
 // the exact silent-failure mode that once hid a broken cron.
-app.all("/api/*", (req, res) => {
+app.all(["/api", "/api/*"], (req, res) => {
   res.status(404).json({
     error: "Not found",
     path: req.path,
