@@ -262,7 +262,7 @@ export class FoodSafetyService {
       // identity is injected as "VERIFIED … do not reinterpret", so
       // "Calcium Lactate Gluconate" must not become Calcium Lactate, nor
       // "Rosemary Extract and Mixed Tocopherols" Mixed Tocopherols.
-      if (re.test(lower) && FoodSafetyService.NAME_FILLER.test(lower.replace(re, " "))) {
+      if (re.test(lower) && FoodSafetyService.isOnlyFiller(lower.replace(re, " "))) {
         return entry;
       }
     }
@@ -271,9 +271,21 @@ export class FoodSafetyService {
 
   // What may surround a registry phrase in a name that IS that additive:
   // its functional class, qualifiers and code — "Acidity Regulator Citric
-  // Acid INS 330", "Antioxidant Mixed Tocopherols".
-  private static readonly NAME_FILLER =
-    /^[\s,&\-]*(?:(?:acidity|regulators?|anti-?caking|agents?|antioxidants?|emulsifiers?|emulsifying|stabili[sz]ers?|stabili[sz]ing|thickeners?|thickening|preservatives?|class|ii|iii|iv|colou?rs?|flavou?r|enhancers?|sweeteners?|raising|leavening|flour|treatment|firming|gelling|glazing|humectants?|sequeste?rants?|natural|artificial|synthetic|permitted|added|food|and|&|of|origin|vegetable|mineral|ins|e|no\.?|\d{3,4}[a-f]?(?:\([ivx]+\))?)[\s,&\-]*)*$/i;
+  // Acid INS 330", "Antioxidant Mixed Tocopherols". Checked ONE TOKEN at a
+  // time: the earlier single regex with an optional separator between
+  // repeated alternatives backtracked exponentially on a run of I's (a
+  // crowd-edited OFF label could hang the cron past 300s — review round 2).
+  private static readonly FILLER_TOKEN =
+    /^(?:acidity|regulators?|anticaking|agents?|antioxidants?|emulsifiers?|emulsifying|stabili[sz]ers?|stabili[sz]ing|thickeners?|thickening|preservatives?|class|ii|iii|iv|colou?rs?|flavou?r|enhancers?|sweeteners?|raising|leavening|flour|treatment|firming|gelling|glazing|humectants?|sequeste?rants?|natural|artificial|synthetic|permitted|added|food|and|of|origin|vegetable|mineral|ins|e|no\.?|\d{3,4}[a-f]?(?:\([ivx]+\))?)$/i;
+
+  private static isOnlyFiller(remainder: string): boolean {
+    return remainder
+      .replace(/\banti-caking\b/gi, "anticaking")
+      .replace(/(^|[^a-z])(ins|e|no\.?)(?=\d)/gi, "$1$2 ")
+      .split(/[\s,&\-]+/)
+      .filter(Boolean)
+      .every((token) => FoodSafetyService.FILLER_TOKEN.test(token));
+  }
 
   private async researchFoodIngredient(ingredientName: string): Promise<FoodSafetyData> {
     // Try FDA first (highest authority for food safety)

@@ -8,6 +8,7 @@ import { describe, it, expect, vi } from "vitest";
 import { AIVettingService, IngredientAnalysis } from "../../server/services/aiVettingService.js";
 import { FoodSafetyService } from "../../server/services/foodSafetyService.js";
 import { analysisCacheKey } from "../../server/utils/cacheKey.js";
+import { GroqProvider } from "../../server/services/providers/groqProvider.js";
 
 function buildService() {
   const service = new AIVettingService("groq", undefined, undefined, undefined, false);
@@ -112,5 +113,44 @@ describe("registry name match — whole identity only", () => {
     const svc = new FoodSafetyService();
     expect((await svc.lookupFoodIngredient("Antioxidant Mixed Tocopherols")).found).toBe(true);
     expect((await svc.lookupFoodIngredient("Acidity Regulator Citric Acid")).name).toBe("Citric Acid");
+  });
+});
+
+describe("registry name match — bounded time (review round 2)", () => {
+  it("a run of I's after a registry phrase cannot hang the lookup", async () => {
+    // The old single filler regex partitioned "iiii…" into ii/iii/iv
+    // exponentially many ways before failing on the "!"
+    const svc = new FoodSafetyService();
+    const t0 = performance.now();
+    const found = await svc.lookupFoodIngredient(`Citric Acid ${"i".repeat(90)}!`);
+    expect(performance.now() - t0).toBeLessThan(500);
+    expect(found.name).toBeUndefined();
+  });
+});
+
+describe("batch analysis (BATCH_ANALYSIS=true) — same shared-row rules as the sequential path", () => {
+  it("analyzes a coded additive under its neutral identity; each product keeps its label name", async () => {
+    const { service, rows } = buildService();
+    const batch = vi.fn(async (items: Array<{ name: string }>) =>
+      items.map((i) => ({ status: "safe", rationale: `rationale written for "${i.name}"`, description: "d", edgeCases: "none", confidence: 0.9 })),
+    );
+    const groq = Object.create(GroqProvider.prototype);
+    groq.analyzeIngredientsBatch = batch;
+    (service as any).aiProvider = groq;
+    const labels = ["Sugar", "Wheat Flour", "Acidity Regulator Acetic Acid INS 260", "Iodised Salt"];
+    const previous = process.env.BATCH_ANALYSIS;
+    process.env.BATCH_ANALYSIS = "true";
+    try {
+      const out = await service.analyzeIngredients(labels, "food");
+      expect(batch).toHaveBeenCalledTimes(1);
+      const sent = batch.mock.calls[0][0].map((i) => i.name);
+      expect(sent).toContain("Acetic Acid INS 260");
+      expect(sent).not.toContain("Acidity Regulator Acetic Acid INS 260");
+      expect(rows.get("ins 260")?.rationale).not.toMatch(/Acidity Regulator/);
+      expect(out.map((a) => a.name)).toEqual(labels);
+    } finally {
+      if (previous === undefined) delete process.env.BATCH_ANALYSIS;
+      else process.env.BATCH_ANALYSIS = previous;
+    }
   });
 });

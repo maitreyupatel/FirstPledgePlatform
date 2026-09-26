@@ -391,12 +391,16 @@ export class AIVettingService {
     if (!(provider instanceof GroqProvider)) throw new Error("Batch analysis requires the Groq provider");
     const isFood = productType === "food" || productType === "supplement";
 
-    const items: Array<{ name: string; context?: string; foodData?: FoodSafetyData; ewgData?: EWGIngredientData }> = [];
+    const items: Array<{ name: string; key: string; context?: string; foodData?: FoodSafetyData; ewgData?: EWGIngredientData }> = [];
     for (const name of names) {
       if (isFood) {
-        const foodData = await this.foodSafetyService.lookupFoodIngredient(name);
+        // Same wording-neutral name as the sequential path: the shared code
+        // row must describe the substance, not the first label's wording
+        const analyzed = this.neutralAdditiveName(name);
+        const foodData = await this.foodSafetyService.lookupFoodIngredient(analyzed);
         items.push({
-          name,
+          name: analyzed,
+          key: analysisCacheKey(name),
           foodData,
           context: foodData.found && foodData.name
             ? `Verified additive identity: ${foodData.name}. ${foodData.regulatoryNotes ?? ""}`
@@ -406,6 +410,7 @@ export class AIVettingService {
         const ewgData = await this.ewgService.searchIngredient(name);
         items.push({
           name,
+          key: analysisCacheKey(name),
           ewgData,
           context: ewgData.found && ewgData.score !== null ? `EWG Skin Deep score: ${ewgData.score}/10` : undefined,
         });
@@ -446,7 +451,7 @@ export class AIVettingService {
       }
       await this.cacheResult(item.name, productType, result);
 
-      map.set(analysisCacheKey(item.name), result);
+      map.set(item.key, result);
     }
     return map;
   }
