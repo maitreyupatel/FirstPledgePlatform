@@ -17,7 +17,11 @@ npm run test:watch       # Watch mode
 npm run test:coverage    # With v8 coverage report
 ```
 
-Tests live in `tests/server/`. The `VERCEL=1` env var is set automatically via `vitest.config.ts` so the Express server never tries to bind port 3000 during tests.
+Tests live in `tests/server/` and `tests/client/` (both run in the node environment); shared fixtures are in `tests/fixtures/`. The `VERCEL=1` env var is set automatically via `vitest.config.ts` so the Express server never tries to bind port 3000 during tests. Per-test timeout is 20s (cold-import cost); a timeout right after `npm install` is usually a cold-cache flake, so rerun first.
+
+## CI
+
+`.github/workflows/ci.yml` runs `npm ci`, `npm run check` (tsc) and `npm test` on every PR and every push to main, plus gitleaks (`.gitleaks.toml`). The gitleaks run on a PR is the real gate: on a push to main it scans nothing for a merge commit, so `.github/workflows/secret-scan-full.yml` scans the whole history weekly (Mon 03:17 UTC) and on demand. Do not merge a red run.
 
 ## Test layers
 
@@ -25,6 +29,7 @@ Tests live in `tests/server/`. The `VERCEL=1` env var is set automatically via `
 |---|---|---|
 | Unit | `tests/server/*.test.ts` | Pure functions, classifiers, auth logic |
 | Integration | `tests/server/*.test.ts` with supertest | API routes, middleware |
+| Client unit | `tests/client/*.test.ts` | Client libs (e.g. the React Query fetcher) |
 | E2E | Run `/qa http://localhost:5173` | Full browser flows |
 
 ## Conventions

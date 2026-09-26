@@ -18,24 +18,31 @@ Deployed on Vercel. Auth via Supabase JWT with API key fallback.
 
 ## Key Architecture
 
-- `server/index.ts` — Express routes (public: GET products; admin: POST/PATCH/DELETE products, vetting)
-- `server/middleware/auth.ts` — Supabase JWT verification + API key fallback
+- `server/index.ts` — Express app: public GET /api/health, GET /api/products[/:id]; admin (Supabase JWT with admin role, or ADMIN_API_KEY): POST/PATCH/DELETE products, /api/vet-ingredients, /api/admin/ingredient-analyses, /api/admin/cron-status. Unmatched `/api` and `/api/*` return JSON 404
+- `server/routes/cron.ts` — /api/cron/daily-ingest (09:00 UTC daily) + /api/cron/refresh-stale-ingredients (Sun 02:00 UTC), both behind CRON_SECRET; every run is logged to `ingest_runs` (trigger 'schedule' only when the User-Agent is vercel-cron, else 'manual')
+- `server/routes/adminReingest.ts` — POST /api/admin/products/:id/reingest `{ingredientsText, apply?: true, hold?}`: re-runs parse → analyze → publish gate. Dry run by default, but dry runs still spend AI calls and write the shared analysis cache. `apply: true` can publish OR unpublish; refuses (409) products with admin overrides
+- `server/middleware/auth.ts` — Supabase JWT verification + API key fallback (constant-time compare)
 - `server/services/aiVettingService.ts` — Multi-layer ingredient analysis: cache → EWG → research → AI
 - `server/storage/supabaseStorage.ts` — Product/ingredient persistence layer
-- `shared/schema.ts` — Drizzle schema: products, ingredients, ingredient_analyses, user_profiles
+- `shared/schema.ts` — Drizzle schema for products + ingredients ONLY. ingredient_analyses, user_profiles and ingest_runs exist only in `supabase/migrations/` (001–011, applied by hand in the SQL editor / Supabase MCP). Runtime uses supabase-js; do NOT run `npm run db:push` (backlog E7.4)
 - `client/src/pages/` — Home, ProductDetail, AdminDashboard, ProductForm
 - `client/src/components/auth/` — AuthProvider (Supabase session), ProtectedRoute
 
 ## Environment Variables Required
 
+Full, commented inventory: `.env.example` (copy to `.env`).
+
 ```
-DATABASE_URL, SUPABASE_URL, SUPABASE_ANON_KEY, SUPABASE_SERVICE_ROLE_KEY
+SUPABASE_URL, SUPABASE_ANON_KEY, SUPABASE_SERVICE_ROLE_KEY
+VITE_SUPABASE_URL, VITE_SUPABASE_ANON_KEY   # client build (anon key only)
+USE_SUPABASE_STORAGE=true   # REQUIRED: anything else silently disables the analysis cache
 AI_PROVIDER=groq|openai|gemini
 GROQ_API_KEY / OPENAI_API_KEY / GEMINI_API_KEY
 ADMIN_API_KEY (admin bearer fallback), CRON_SECRET (required in production)
 GOOGLE_API_KEY + GOOGLE_CX_ID (optional: citation + legacy research search)
-CLIENT_ORIGIN=http://localhost:5173
+CLIENT_ORIGIN=http://localhost:5173, PORT=3000
 NODE_ENV=development|production
+DATABASE_URL                # drizzle-kit only; the server does not read it
 ```
 
 Optional AI-pipeline tuning:
@@ -48,6 +55,9 @@ AI_CALL_DELAY_MS=10000  # pacing between fresh AI calls (default 2000)
 BATCH_ANALYSIS=true     # opt-in: analyze uncached ingredients in one call
 GOOGLE_SEARCH_DAILY_LIMIT=100  # legacy CSE research quota
 OPENAI_MODEL / GEMINI_MODEL    # standby provider overrides
+CRON_BUDGET_MS          # default 50000; prod 280000 via vercel.json
+CRON_PRODUCTS_PER_DAY   # default 1, capped at 2 in code
+INGREDIENT_REFRESH_DAYS=30     # re-analyze cached rows older than this
 ```
 
 ## gstack
@@ -77,13 +87,14 @@ Available skills:
 
 1. `/cso` — security audit (auth middleware, admin routes, AI input, external API calls)
 2. `/qa http://localhost:5173` — QA the full ingredient vetting workflow in real browser
-3. `/ship` — sets up test framework (project currently has no tests)
+3. `/ship` — test framework + CI already exist (Vitest, 350 tests; CI gates tsc + tests + gitleaks)
 
 ## Testing
 
-Run: `npm test` (Vitest, 115+ tests across `tests/server/`, ~3s)
+Run: `npm test` (Vitest, 350 tests in 32 files across `tests/server/` and `tests/client/`, ~4s warm, ~20s cold; per-test timeout 20s)
 Coverage: `npm run test:coverage`
-Test directory: `tests/server/`
+Test directories: `tests/server/`, `tests/client/` (node env), shared fixtures in `tests/fixtures/`.
+CI (`.github/workflows/ci.yml`) runs `npm run check`, `npm test` and gitleaks on every PR and push to main (the PR scan is the gate; `secret-scan-full.yml` sweeps full history weekly).
 See [TESTING.md](TESTING.md) for full conventions.
 
 - New function → write a corresponding test

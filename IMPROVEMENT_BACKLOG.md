@@ -107,7 +107,7 @@ products' ingredient lists).
 > (7 damaged/truncated labels, 12 generic-declaration holds — see E1.12);
 > 2 duplicates unpublished. Published 45 → 24. Details: IMPROVEMENTS.md S11.
 
-**E1.12 [agent/high] ✅ DONE 2026-09-26 (PR stacked on #18)** Generic
+**E1.12 [agent/high] ✅ DONE 2026-09-26 (PR #19, merged)** Generic
 declarations FSSAI permits on labels — "Spices and Condiments", "Natural
 Flavouring Substances", "Nature Identical Flavouring Substances", "Seasoning"
 — get 0.2-confidence verdicts because the model will not rate an undisclosed
@@ -146,9 +146,25 @@ against the pack, re-ingest with cleaned text); Thums up (held: its compliant
 flavour name makes a 67-char name — re-ingest with cleaned text); Crunchex
 ("Seasoning" compound head scores 0.2 — E1.10); Farali Chivda (label fuses
 "CARDAMOM NUTMEG");
-Glow & Lovely draft = barcode duplicate with a doubled name; a THIRD Sprite
-draft ("Coca Cola", created 2026-09-26 by the unfixed cron on main); 36
+Glow & Lovely draft `599249d4` = barcode duplicate (8909106030534) of the
+published product — discard it; a THIRD Sprite draft (brand "Coca Cola",
+barcode 8901764032707, not the live Sprite's 8901764032912) and a "Pepsi"
+draft, both created 09:58 UTC 2026-09-26 by main's pre-#18 cron; 36
 orphaned legacy-keyed cache rows (inert; optional cleanup).
+> **Post-merge repair 2026-09-26 (~13:05 UTC):** admin re-ingest, dry run →
+> apply, snapshots, 0 mismatches, still 32 published, original publish
+> dates kept. Bisleri (bare "minerals" → Calcium Chloride, Magnesium
+> Sulphate, Potassium Bicarbonate); Sting (flavouring row now carries the
+> fixed generic-declaration verdict); Moong Dal (Haldiram's) (merged "Cotton
+> Seed Oil Refined & Iodised Salt" split — operator edit: list-final "&");
+> Dahi (Amul) ("Pasteurised toned mil" → "milk", label typo); Smoodh Lassi
+> ("Iodised Salt And Nature Identical Flavouring Substance" split; flavour
+> now "Nature Identical Flavouring Substance - Rose"). The published Glow &
+> Lovely name was de-duplicated via admin PATCH ("Glow & LovelyGlow &
+> Lovely …" → "Glow & Lovely Re-New Bright Advanced Multi Vitamin Serum in
+> Cream"). Still open: the Glow & Lovely draft above and the label typo
+> "Gernaniol" in its list; Thums up, Crunchex, Farali, Alpino, the third
+> Sprite draft, the Pepsi draft.
 
 **E1.8 [agent/low]** Same substance, divergent verdicts across name variants
 ("aqua" vs "water" class). Consider alias normalization before cache lookup.
@@ -249,7 +265,9 @@ unblocked by E2.1.
 > **Tooling 2026-09-26:** `POST /api/admin/products/:id/reingest` re-runs a
 > stored product through the cron's parse → analyze → gate path with a
 > supplied label text; dry run by default (`apply: true` to write), operator
-> `hold`, before/after report. Triage itself (now 30 drafts) still pending.
+> `hold`, before/after report. Triage itself (45 drafts on 2026-09-26, after
+> both repairs) still pending. Note: dry runs still write analyses to the
+> shared cache.
 
 **E3.7 [product/high]** Public methodology page — every credible competitor
 leads with one; FirstPledge's pipeline (registry grounding, search-grounded
@@ -284,6 +302,12 @@ transaction (or at minimum reorder: insert-first, publish-last).
 left but worst-case single-ingredient latency is ~90s+ (45s compound + 45s
 verification + retries) — the "never killed mid-write" guarantee can break.
 Raise the start-buffer / propagate deadline into compound timeouts.
+> **Partial 2026-09-26 (post-merge hardening PR):** start reserve 15s → 60s
+> (`FRESH_ANALYSIS_RESERVE_MS`); the pacing pause runs only when a later
+> ingredient needs a fresh call and never into the reserve (throws
+> instead); Groq SDK client bounded to 30s × 1 retry (was 60s × 3 attempts);
+> EWG fetches abort at 10s. The compound call keeps its own 45s timeout and
+> the deadline is not yet propagated into it.
 
 **E4.5 [agent/medium] ✅ DONE 2026-08-28** `ilike` with unescaped `%`/`_` in
 findByNameAndBrand/hasSimilarProduct — "100% Real..." names act as wildcards
@@ -320,13 +344,30 @@ in freshness (e.g. `lastCreatedAt` over all rows + separate published count).
 > on a missed scheduled run (>24.5h), 72h with no product, or an unreadable DB.
 > Targets both September failure classes: false alarms on draft-only days,
 > and a missed run (Sep 21) that raised no alarm.
+> ingest_runs was still empty after the 2026-09-26 deploy (`/api/health`
+> `ingest: null`), so the >24.5h check has nothing to measure until the first
+> scheduled run (daily-ingest, 09:00 UTC hour 2026-09-27). The post-merge
+> hardening PR makes "no scheduled run recorded" itself a failure
+> from 10:00 UTC on 2026-09-27. Operator check after 2026-09-27 ~10:15 UTC (the cron fires late in the 09:00 hour; its products have landed 09:58–10:03 UTC daily since 08-29):
+> `select job, trigger, outcome, started_at from ingest_runs order by
+> started_at desc limit 3` must show a trigger='schedule' daily-ingest row.
+> `lastPublishedAt` is now the newest `published_at` among published products
+> (was the created_at of the newest published product) — same PR.
 
 **E4.11 [agent/low]** `USE_SUPABASE_STORAGE` env gates the entire analysis
 cache but is documented nowhere (works in prod today; a fresh deploy without
 it would silently disable caching). Document + default-safe.
+> **Partial 2026-09-26:** documented in `.env.example` (PR #16). Still not
+> default-safe (server/index.ts:84 requires the literal "true").
 
 **E4.12 [agent/low]** auth: ADMIN_API_KEY compared non-constant-time; email
 logging in prod; dead `server/lib/supabase.ts` duplicate client.
+> **Partial 2026-09-26 (post-merge hardening PR):** ADMIN_API_KEY now
+> compared in constant time (`secretsMatch`: sha256 both sides +
+> `timingSafeEqual`, so length does not leak either); the Supabase profile
+> error text in the 403 is returned only when NODE_ENV=development. Email
+> logging (auth.ts, unguarded) and the dead duplicate client remain; auth
+> rate limits are tracked in E7.9.
 
 ## E5 — Performance
 
@@ -352,6 +393,14 @@ no sizing). Proxy/cache or at least lazy-load with dimensions.
 repair unpublished 21 products the plain URL still listed 36 while the DB
 and a cache-busted request showed 24. Set an explicit short `s-maxage` +
 `stale-while-revalidate` (or `private`) so unpublishing takes effect promptly.
+> **Rediagnosed 2026-09-26:** the route ALREADY sent `public, s-maxage=60,
+> stale-while-revalidate=300` (the edge strips `s-maxage` from what the
+> client sees, hence "no max-age"). Staleness after an unpublish is up to ~6
+> minutes by design of those values, not unbounded. **Fixed (post-merge
+> hardening PR):** only anonymous requests without `includeUnpublished` get
+> the public header; everything else is `private, no-store` — an anonymous
+> hit on the admin dashboard's URL could otherwise seed a published-only
+> copy under it. Shorter values or purge-on-unpublish remain optional.
 
 **E5.6 [agent/low]** Dead heavy deps installed: framer-motion, recharts —
 remove (also relevant to E5.2).
@@ -375,12 +424,24 @@ limits/banned-abroad) — differentiator vs global apps.
 
 ## E7 — Infra & process
 
-**E7.1** CI workflow: install + tsc + vitest + gitleaks on PR and main
-(carried from v1; now also the E0.3 vehicle).
+**E7.1 ✅ DONE 2026-09-26 (PR #16)** CI workflow: install + tsc + vitest +
+gitleaks on PR and main (also the E0.3 vehicle, i.e. E0.1 step 3).
+> Evidence: .github/workflows/ci.yml + .gitleaks.toml; green on the merge
+> commit 7ba9b05. Post-merge hardening PR: main runs are no longer cancelled
+> by the next merge (one concurrency group per commit on main; cancel-in-progress only for pull_request); the push-to-
+> main scan covers no commits for a merge commit, so PR runs are the gate
+> and `secret-scan-full.yml` scans full history weekly (Mon 03:17 UTC) and
+> on demand.
 **E7.2 ✅ DONE 2026-09-26** `ingest_runs` telemetry table (carried).
 > Evidence: migrations 010/011 applied (additive, RLS default-deny); every
 > cron run records start/finish/outcome/counts and scheduled-vs-manual
-> trigger, fail-open. Exposed via /api/health and /api/cron-status.
+> trigger, fail-open. Exposed via /api/health (`ingest`, last scheduled run
+> only) and /api/admin/cron-status (admin; `recent_runs`, last 14). The
+> trigger is derived from the User-Agent alone ('schedule' = vercel-cron), so
+> a CRON_SECRET holder can record a forged 'schedule' run. Post-merge
+> hardening PR: a daily-ingest whose every candidate was skipped because the
+> duplicate checks failed now records outcome 'error' (HTTP 502) instead of
+> 'no_candidates'; `findByNameAndBrand` fails closed on a DB error.
 **E7.3** Error tracking (carried).
 **E7.4 [agent]** Schema reconciliation: Drizzle schema missing 3 live tables
 and all indexes (`db:push` is a loaded gun; Drizzle unused at runtime —
@@ -392,27 +453,39 @@ real query patterns; drop dead `product_queue` + enums.
 **E7.8 [agent]** npm audit (full): esbuild dev-server + @babel/core CVEs in
 dev tooling; supabase-js 29 releases behind. Upgrade pass with tests.
 **E7.9 [agent]** Rate limits on mutating admin routes + before Supabase auth
-call in requireAuth; cache /api/health (it runs 2 DB queries per anonymous hit).
+call in requireAuth; cache /api/health (each uncached computation runs 5 DB
+queries: 4 freshness + 1 ingest_runs).
 > **Partial 2026-09-26:** /api/health body memoized 60s. Rate limits pending.
 
 ## User actions (only you can do these)
 
-1. **Merge #16 → #17 → #18** (agent merges are blocked by policy). Until #18
-   ships, the daily cron on main keeps dropping additive codes and admitting
-   brand/barcode duplicates, and the health watch false-alarms.
+1. ✅ DONE 2026-09-26 — #16, #17, #18 and #19 merged 12:33–12:34 UTC (main
+   7ba9b05; Production deployment confirmed, CI green on main, health watch
+   dispatched 12:36 UTC and passed). Follow-up: confirm the first
+   *scheduled* daily-ingest (2026-09-27, 09:00 UTC hour) wrote an
+   `ingest_runs` row with trigger='schedule' and that `/api/health` then
+   shows a non-null `ingest` (see E4.10).
 2. **E0.1/E0.2 rotations** — GEMINI_API_KEY, GOOGLE_API_KEY (+ GOOGLE_CX_ID),
    CRON_SECRET: re-verified 2026-09-26 as still equal to the leaked values.
-   Supabase + Groq already rotated.
+   Supabase + Groq already rotated. Rotating CRON_SECRET also closes the
+   forged trigger='schedule' `ingest_runs` row (the trigger is derived from
+   the User-Agent, see E7.2).
 3. Supabase console: leaked-password protection toggle (pending since July).
 4. Vercel: set a real `ADMIN_API_KEY`; add rotated keys.
 5. Decide: repo public vs private; imported-brands policy (E6 note: 890 gate
    currently excludes K-beauty); custom domain.
-6. Re-authorize the Supabase MCP connector in claude.ai settings if MCP DB
-   access is wanted.
+6. ✅ Supabase MCP connector authorized (in use 2026-09-26).
+7. Confirm the OLD Supabase project whose service-role key leaked in
+   `efeb01b` (URL prefix `ilsw…`) is deleted or its keys revoked.
+8. GitHub: enable secret scanning + push protection, and protect `main`
+   (require PRs and the `check + test` and `secret scan` checks).
 
 ## Verified healthy (don't touch)
 
 Daily 890-gated India-only ingestion; publish gates (banned/low-conf/garbled
 → draft — they caught every bad verdict in this audit); GH Actions health
 watch green; weekly refresh executing (throughput aside); enforced CSP +
-headers; edge-cached catalog; 137/137 tests; tsc clean.
+headers; 329/329 tests on main (350/350 with the post-merge hardening PR);
+tsc clean; CI (tsc + vitest + gitleaks) green on main. (Catalog edge
+caching: an unpublish can take up to ~6 min to show, by design of
+s-maxage=60 + stale-while-revalidate=300, see E5.7.)

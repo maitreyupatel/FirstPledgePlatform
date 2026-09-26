@@ -9,13 +9,14 @@ Console-only toggle (Auth → Settings). Cannot be done via SQL/API.
 
 ## Monitoring (user action recommended)
 
-### Durable external monitor on /api/health
-**Priority:** P1
-`/api/health` now returns `catalog.stale: true` after 72h without a new product.
-Point any free uptime monitor (e.g. UptimeRobot keyword alert on `"stale":true`)
-at https://maitreyupatel-first-pledgeplatform.vercel.app/api/health for
-permanent dry-spell alerting. An in-session Claude watcher covers the next
-7 days only.
+### Second channel for /api/health (optional)
+**Priority:** P3
+Done: `.github/workflows/health-watch.yml` (daily; fails on non-ok health,
+an unreadable catalog or ingest_runs, a last scheduled run >24.5h old, no
+scheduled run recorded from 10:00 UTC on 2026-09-27, or 72h with no product of any
+status). Optional: add an external keyword monitor (e.g. UptimeRobot on
+`"stale":true`) at https://maitreyupatel-first-pledgeplatform.vercel.app/api/health
+as a second channel.
 
 ## Catalog
 
@@ -26,10 +27,8 @@ Find the real label (yogabars.in / pack photo), re-vet, publish.
 
 ### Review remaining drafts
 **Priority:** P2
-Six drafts await publish/discard: Biotique Sun Shield (junk ingredient data),
-D'lecta Mozzarella, Ching's Red Chilli Sauce, Some By Mi (Korean-market record),
-Yoga Bar Muesli+ (above), Himalaya "Lip Balm" (real brand, generic product
-name — consider renaming from the pack label before publishing).
+45 drafts (2026-09-26); triage is tracked in IMPROVEMENT_BACKLOG E3.6/E1.13,
+using `POST /api/admin/products/:id/reingest`.
 
 ### rom&nd Glasting Melting Balm convergence
 **Priority:** P3

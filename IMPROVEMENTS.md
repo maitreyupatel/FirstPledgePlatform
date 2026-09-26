@@ -1,11 +1,102 @@
 # IMPROVEMENTS.md — Audit Log
 
+# Session 11 (cont.): merge, post-merge verification and hardening (2026-09-26)
+
+#16 → #17 → #18 → #19 merged 12:33–12:34 UTC with merge commits (main
+7ba9b05; merged feature branches deleted). Production deploy succeeded; CI
+(check + test, secret scan) green on main; the health watch, dispatched
+12:36 UTC, passed ("Healthy: last run n/a (no run log yet)"). Live
+/api/health: published 32, drafts 45, stale false, `ingest: null` —
+ingest_runs is still empty in production. First rows: the Sunday
+refresh-stale cron (~02:00 UTC 09-27) and the first scheduled daily-ingest
+(09:00 UTC hour, 09-27).
+
+## [VERIFIED] Post-merge review
+- 62-agent read-only workflow; every medium+ finding checked by 3 skeptics.
+  Confirmed findings led to the data repair and the hardening PR below;
+  stale docs (merge still "pending", test counts, dormant missed-run check,
+  a non-existent /api/cron-status route) corrected in the same PR.
+
+## [DATA] Second repair (~13:05 UTC)
+Admin re-ingest, dry run → apply, snapshots, 0 mismatches; still 32
+published, original publish dates kept.
+- Bisleri: bare "minerals" → Calcium Chloride, Magnesium Sulphate,
+  Potassium Bicarbonate.
+- Sting: flavouring row now carries the fixed generic-declaration verdict.
+- Moong Dal (Haldiram's): merged "Cotton Seed Oil Refined & Iodised Salt"
+  split in two (operator edit: list-final "&").
+- Dahi (Amul): "Pasteurised toned mil" → "Pasteurised toned milk" (label
+  typo).
+- Smoodh Lassi: "Iodised Salt And Nature Identical Flavouring Substance"
+  split; flavour now "Nature Identical Flavouring Substance - Rose".
+- Glow & Lovely: published name de-duplicated via admin PATCH ("Glow &
+  LovelyGlow & Lovely …" → "Glow & Lovely Re-New Bright Advanced Multi
+  Vitamin Serum in Cream").
+- Still open: Glow & Lovely draft 599249d4 (same barcode) and the label
+  typo "Gernaniol" in its published list.
+
+## [HARDENING] PR fix/post-merge-hardening — 350/350 tests (32 files), tsc clean
+- Deadline: fresh-analysis reserve 15s → 60s (it was shorter than one 20s
+  pacing pause); the pause runs only when a LATER ingredient needs a fresh
+  call and never into the reserve — it throws instead, keeping budget for
+  writes (E4.4 partial). The cron scales the reserve to its budget (60s at
+  280s; 15s at the 50s local default), stops the product loop after a
+  deadline stop (the next product would call the AI with no pacing pause),
+  and never starts a create (two inserts) past its budget.
+- Bounded external calls: Groq client 30s timeout, maxRetries 1 (SDK default
+  was 60s × 3 attempts), and a timeout/connection error no longer walks the
+  3-model fallback list; both EWG fetches abort at 10s. The search-grounded
+  call keeps its own 45s timeout, so a worst-case ingredient can still
+  exceed the reserve (E4.4 partial). bulkIngest skips a candidate whose
+  duplicate check fails instead of aborting.
+- GET /api/products: `public, s-maxage=60, stale-while-revalidate=300` only
+  for anonymous requests without includeUnpublished, else `private,
+  no-store` — an anonymous hit could seed a published-only copy under the
+  admin dashboard's URL. E5.7 rediagnosed: the header was already there;
+  an unpublish shows within ~6 min by design.
+- JSON 404 for `/api` itself too (Express route + vercel.json rewrite).
+- `catalog.lastPublishedAt` = newest published_at among published products
+  (was the created_at of the newest published product).
+- Dedup fails closed everywhere: findByNameAndBrand throws on a DB error;
+  a daily-ingest whose candidates were all skipped for failed checks
+  records outcome 'error' (HTTP 502), not 'no_candidates'.
+- Auth (E4.12 part): ADMIN_API_KEY compared in constant time (sha256 +
+  timingSafeEqual) in requireAuth and optionalAuth; the Supabase profile
+  error text only in development.
+- Health watch: from 10:00 UTC on 2026-09-27 a missing scheduled run in ingest_runs
+  FAILS the watch (was skipped forever while `ingest` was null); comment
+  corrected — GitHub fires the 10:43 schedule 3–6h late.
+- CI: one concurrency group per commit on main, cancel-in-progress only for
+  pull_request (three main test runs were cancelled during the merges; a
+  shared main group cancels queued runs even without cancel-in-progress); comment corrected (a push-to-main gitleaks
+  run scans 0 commits for a merge commit; PR runs are the gate). New
+  `secret-scan-full.yml`: weekly (Mon 03:17 UTC) + manual full-history scan.
+
+## Pending user actions
+- Rotate GEMINI_API_KEY, GOOGLE_API_KEY (+ GOOGLE_CX_ID), CRON_SECRET. A
+  CRON_SECRET holder can also forge a trigger='schedule' ingest_runs row
+  (the trigger is derived from the User-Agent).
+- Confirm the old Supabase project whose service-role key leaked in efeb01b
+  (URL prefix "ilsw…") is deleted or its keys revoked.
+- GitHub: enable secret scanning + push protection; protect main (require
+  PRs + the "check + test" and "secret scan" checks).
+- Supabase leaked-password protection toggle.
+- After the 2026-09-27 09:00 UTC cron: a trigger='schedule' ingest_runs row
+  exists and /api/health `.ingest` is non-null.
+
+Known limits still open: E1.10 (compound sub-ingredients), E1.13 (held
+drafts: Thums up, Crunchex, Farali, Alpino, Glow & Lovely draft, third
+Sprite draft "Coca Cola", Pepsi draft), E1.14 (cosmetic-pipeline verdicts on
+food; root cause open), the User-Agent-only trigger.
+
 # Session 11: additive codes, published-data repair, generic declarations, monitoring truth (2026-09-26)
 
 Trigger: an out-of-band health check reported that Indian labels print INS
 codes as bare numbers and the parser dropped them. Every claim was
 re-verified against the live DB and real Open Food Facts text before acting.
-PR #18 (stacked on #17); 311/311 tests, tsc clean.
+PRs #18 and #19 (E1.12); #16–#19 all merged 2026-09-26 (main 7ba9b05,
+Production deploy confirmed). 311/311 tests at #18, 329/329 (29 files) on
+main; tsc clean (CI green on 7ba9b05).
 
 ## [VERIFIED] Audit claims vs live data
 - Parser: confirmed and WIDER than reported. Re-parsing all 74 real labels:
@@ -56,15 +147,16 @@ the live site (0 mismatches).
   not rate an undisclosed category): Thums up, Amul Lassi, Chef's Special,
   Crunchex, Tandoori Mayo, Greek yogurt, Amul Masti, Kissan Ketchup, Farali
   Chivda, Saffola, Mountain Dew, Schezwan Chutney. Corrected rows are saved
-  as drafts; a deterministic verdict for generic declarations (E1.12) is
-  next, then one re-ingest republishes those that pass.
+  as drafts; the deterministic generic-declaration verdict (E1.12, PR #19)
+  followed, and one re-ingest republished 9 of the 12, see [VERDICTS] below.
 - Operator edits (recorded per step, literal find/replace on label text):
   Maltodectrin→Maltodextrin, Anlioxidant→Antioxidant, Flavou→Flavour,
   SEQUESTERANTS→SEQUESTRANTS, Rice Br Oil→Rice Bran Oil, and splitting an
   INCI list's final "and" (La Shield, Photostable Gold).
 - Not touched: Alpino (current OFF text damaged, cannot verify); the Glow &
-  Lovely draft duplicate; a THIRD Sprite draft ("Coca Cola") created today
-  by the unfixed cron on main.
+  Lovely draft duplicate; a THIRD Sprite draft ("Coca Cola", barcode
+  8901764032707) and a "Pepsi" draft created 09:58 UTC by main's pre-#18
+  cron (#18 merged 12:34 UTC).
 
 ## [VERDICTS] Generic declarations (E1.12) — published 24 → 32
 - FSSAI Labelling & Display Regs 2020, Reg. 5 (verified in the Gazette text):
@@ -89,13 +181,18 @@ the live site (0 mismatches).
 ## [OPS] Monitoring
 - Health freshness over all statuses; ingest_runs (migrations 010/011,
   additive, RLS default-deny) with scheduled-vs-manual trigger; watch fails
-  on a missed run (>24.5h), 72h with no product, or an unreadable DB.
+  on a missed run (>24.5h), 72h with no product, or an unreadable DB. The
+  missed-run check needs a recorded scheduled run — ingest_runs was empty
+  at deploy, so `/api/health` returns `ingest: null` until the first one
+  (2026-09-27); from 10:00 UTC on 2026-09-27 "none recorded" fails the watch (post-merge
+  hardening, below).
 - Refresh cron pages past orphaned legacy-keyed cache rows (36 in prod).
 
 ## Pending user actions
-- Merge #16 → #17 → #18. Until then the health watch keeps false-alarming
-  (main measures freshness from published products only) and the cron keeps
-  missing additives and brand/barcode duplicates.
+- ✅ Merged #16 → #17 → #18 → #19 (2026-09-26 12:33–12:34 UTC; main
+  7ba9b05, Production deploy confirmed). Verify after the 2026-09-27 09:00
+  UTC cron: an ingest_runs row with trigger='schedule' exists and
+  /api/health `.ingest` is non-null.
 - Rotate GEMINI_API_KEY, GOOGLE_API_KEY (+ CX), CRON_SECRET (Vercel + .env).
 - Supabase leaked-password protection toggle.
 
