@@ -1,6 +1,6 @@
 # IMPROVEMENTS.md — Audit Log
 
-# Session 11: additive codes, published-data repair, monitoring truth (2026-09-26)
+# Session 11: additive codes, published-data repair, generic declarations, monitoring truth (2026-09-26)
 
 Trigger: an out-of-band health check reported that Indian labels print INS
 codes as bare numbers and the parser dropped them. Every claim was
@@ -65,6 +65,26 @@ the live site (0 mismatches).
 - Not touched: Alpino (current OFF text damaged, cannot verify); the Glow &
   Lovely draft duplicate; a THIRD Sprite draft ("Coca Cola") created today
   by the unfixed cron on main.
+
+## [VERDICTS] Generic declarations (E1.12) — published 24 → 32
+- FSSAI Labelling & Display Regs 2020, Reg. 5 (verified in the Gazette text):
+  spices/herbs/condiments may be declared by class title; natural and
+  nature-identical flavourings by class name; artificial ones by the
+  flavour's common name. A declaration the label leaves undisclosed now
+  gets a fixed, cited verdict (caution 0.85, "does not list the individual
+  …") instead of the model's ~0.2; the gate is unchanged.
+- Independent review before any write caught the parser collapsing LISTED
+  spices into the bare class (the verdict would have claimed "not listed"
+  on Tempting, Saffola, Farali) and a cron starvation path; also that the
+  0.85 rows must never enter the shared cache (main's deployed cron reads
+  it and would have published more truncated lists). All fixed first.
+- Re-ingest (dry run → apply, 0 mismatches): republished Amul Lassi, Chef's
+  Special, Tandoori Mayo, Greek yogurt, Amul Masti, Kissan Ketchup,
+  Saffola, Mountain Dew, Schezwan Chutney; corrected Tempting, Sprite; held
+  Thums up, Crunchex, Farali (reasons in backlog E1.13).
+- Found: 3 published FOOD products carried COSMETIC-pipeline verdicts (EWG
+  rationales) — Sev Murmura and Heritage A-One re-analyzed and kept live;
+  Alpino unpublished (damaged label). Root cause open: E1.14.
 
 ## [OPS] Monitoring
 - Health freshness over all statuses; ingest_runs (migrations 010/011,
