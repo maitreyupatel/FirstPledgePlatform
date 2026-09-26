@@ -9,11 +9,15 @@
  * "Coca-Cola". No name/brand normalisation can equate those; the barcode can.
  */
 
-/** OFF's image folder for a barcode: codes longer than 8 digits split 3/3/3/rest. */
+/**
+ * OFF's image folder for a barcode: shorter codes are zero-padded to 13
+ * digits (EAN-8 89080153 lives under 000/008/908/0153 — verified on the
+ * live Maggi record), then split 3/3/3/rest.
+ */
 export function offImagePath(barcode: string): string | null {
-  const code = barcode.replace(/\D/g, "");
-  if (code.length < 8) return null;
-  if (code.length === 8) return code;
+  const digits = barcode.replace(/\D/g, "");
+  if (digits.length < 8) return null;
+  const code = digits.padStart(13, "0");
   return `${code.slice(0, 3)}/${code.slice(3, 6)}/${code.slice(6, 9)}/${code.slice(9)}`;
 }
 

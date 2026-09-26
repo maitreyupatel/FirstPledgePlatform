@@ -227,14 +227,12 @@ export class SupabaseStorage {
    * has no barcode column, but OFF image URLs encode it — the same barcode
    * under two brand strings ("sprite" / "Coca-Cola") is the same product.
    */
-  async hasBarcode(barcode: string): Promise<boolean> {
+  async hasBarcode(barcode: string, excludeId?: string): Promise<boolean> {
     const path = offImagePath(barcode);
     if (!path) return false;
-    const { data, error } = await this.supabase
-      .from("products")
-      .select("id")
-      .ilike("image_url", `%/images/products/${escapeLike(path)}/%`)
-      .limit(1);
+    let query = this.supabase.from("products").select("id").ilike("image_url", `%/images/products/${escapeLike(path)}/%`);
+    if (excludeId) query = query.neq("id", excludeId);
+    const { data, error } = await query.limit(1);
     return !error && !!data && data.length > 0;
   }
 
@@ -257,7 +255,7 @@ export class SupabaseStorage {
    * product (spelling variant / word order). Complements the exact
    * findByNameAndBrand match — see server/utils/nameSimilarity.ts.
    */
-  async hasSimilarProduct(name: string, brand: string): Promise<boolean> {
+  async hasSimilarProduct(name: string, brand: string, excludeId?: string): Promise<boolean> {
     // Candidates by brand PREFIX, then same-brand by normalized key: an
     // exact brand match missed "Haldiram's" vs "Haldiram" (duplicate
     // published). namesLookAlike still decides whether it is the same product.
@@ -269,11 +267,10 @@ export class SupabaseStorage {
     if (!pattern) return false;
     const sameBrand = (rowBrand: string) =>
       key ? brandKey(rowBrand) === key : rowBrand.trim().toLowerCase() === brand.trim().toLowerCase();
-    const { data, error } = await this.supabase
-      .from("products")
-      .select("name, brand")
-      .ilike("brand", pattern)
-      .limit(200);
+    let query = this.supabase.from("products").select("name, brand").ilike("brand", pattern);
+    // A product must not count as its own duplicate (admin re-ingest of a draft)
+    if (excludeId) query = query.neq("id", excludeId);
+    const { data, error } = await query.limit(200);
     if (error || !data) return false;
     return data.some((row: any) => sameBrand(String(row.brand)) && namesLookAlike(String(row.name), name));
   }

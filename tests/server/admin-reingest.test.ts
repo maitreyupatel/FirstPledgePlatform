@@ -1,8 +1,9 @@
 /**
  * Admin re-ingest: a stored product re-runs the SAME parse → analyze →
  * publish-gate path as the daily cron. It must report before/after, write
- * nothing on dryRun, and apply the gate in BOTH directions — a repaired
- * product whose real label turns out damaged is unpublished, not left live.
+ * nothing unless asked (apply: true), apply the gate in BOTH directions,
+ * and never leave a published product half-written or duplicated
+ * (adversarial review round 2, 2026-09-26).
  */
 import { describe, it, expect, vi } from "vitest";
 import express from "express";
@@ -17,7 +18,7 @@ import { buildAdminReingestRouter } from "../../server/routes/adminReingest";
 const MOUNTAIN_DEW =
   "CARBONATED WATER, SUGAR, ACIDITY REGULATORS (330 ,331), PRESERVATIVE (211), CAFFEINE (13 mg/100 g), COLOUR (102).";
 
-function setup(opts: { confidence?: number; product?: unknown } = {}) {
+function setup(opts: { confidence?: number; product?: unknown; failInsertOnce?: boolean; analysisThrows?: boolean; duplicate?: boolean } = {}) {
   const product =
     opts.product === undefined
       ? {
@@ -26,38 +27,52 @@ function setup(opts: { confidence?: number; product?: unknown } = {}) {
           brand: "PepsiCo",
           status: "published",
           productType: "food",
+          imageUrl: "https://images.openfoodfacts.org/images/products/890/208/036/4022/front_en.6.400.jpg",
+          publishedAt: "2026-09-14T10:00:00Z",
           ingredients: [
             { name: "Carbonated Water", status: "safe" },
             { name: "acidity regulators", status: "safe" },
           ],
         }
       : opts.product;
+  let failNext = !!opts.failInsertOnce;
   const storage = {
     getById: vi.fn().mockResolvedValue(product),
-    update: vi.fn().mockResolvedValue(product),
+    update: vi.fn(async (_id: string, input: any) => {
+      if (failNext && input.ingredients) {
+        failNext = false;
+        throw new Error("Failed to insert ingredients: upstream timeout");
+      }
+      return product;
+    }),
+    hasBarcode: vi.fn().mockResolvedValue(!!opts.duplicate),
+    hasSimilarProduct: vi.fn().mockResolvedValue(false),
   };
   const ai = {
-    analyzeIngredients: vi.fn(async (names: string[]) =>
-      names.map((name) => ({
+    analyzeIngredients: vi.fn(async (names: string[]) => {
+      if (opts.analysisThrows) throw new Error("Groq 429");
+      return names.map((name) => ({
         name,
         status: "safe",
         rationale: `r:${name}`,
         sourceUrl: "https://example.org",
         confidence: opts.confidence ?? 0.85,
-      })),
-    ),
+      }));
+    }),
   };
   const app = express();
   app.use(express.json());
   app.use("/api/admin", buildAdminReingestRouter(ai as any, () => storage as any));
-  return { app, storage, ai };
+  const post = (body: unknown) => request(app).post("/api/admin/products/p1/reingest").send(body as object);
+  return { post, storage, ai };
 }
 
 describe("POST /api/admin/products/:id/reingest", () => {
-  it("dryRun reports the repaired list and writes nothing", async () => {
-    const { app, storage, ai } = setup();
-    const res = await request(app).post("/api/admin/products/p1/reingest").send({ ingredientsText: MOUNTAIN_DEW, dryRun: true });
+  it("without apply it is a dry run: reports the repaired list, writes nothing", async () => {
+    const { post, storage, ai } = setup();
+    const res = await post({ ingredientsText: MOUNTAIN_DEW });
     expect(res.status).toBe(200);
+    expect(res.body.dryRun).toBe(true);
     expect(res.body.written).toBe(false);
     expect(storage.update).not.toHaveBeenCalled();
     expect(ai.analyzeIngredients.mock.calls[0][0]).toContain("Preservative INS 211");
@@ -74,32 +89,56 @@ describe("POST /api/admin/products/:id/reingest", () => {
     expect(res.body.after.status).toBe("published");
   });
 
-  it("apply writes the gate's status, the rows the cron would write, and the summary", async () => {
-    const { app, storage } = setup();
-    const res = await request(app).post("/api/admin/products/p1/reingest").send({ ingredientsText: MOUNTAIN_DEW });
+  it("a misspelled flag is rejected, never treated as a write (R2-29)", async () => {
+    const { post, storage } = setup({ confidence: 0.5 });
+    for (const body of [{ ingredientsText: MOUNTAIN_DEW, dry_run: true }, { ingredientsText: MOUNTAIN_DEW, dryrun: true }, { ingredientsText: MOUNTAIN_DEW, apply: "yes" }]) {
+      expect((await post(body)).status).toBe(400);
+    }
+    expect(storage.update).not.toHaveBeenCalled();
+  });
+
+  it("apply writes the new rows as a DRAFT first, then publishes with the original date (R2-25)", async () => {
+    const { post, storage } = setup();
+    const res = await post({ ingredientsText: MOUNTAIN_DEW, apply: true });
     expect(res.body.written).toBe(true);
-    const [id, input] = storage.update.mock.calls[0];
-    expect(id).toBe("p1");
-    expect(input.status).toBe("published");
-    expect(input.ingredients).toHaveLength(7);
-    expect(input.ingredients[4]).toMatchObject({ name: "Preservative INS 211", rationale: "r:Preservative INS 211", isOverride: false });
-    expect(input.summary).toMatch(/7 ingredients analyzed from Open Food Facts/);
+    expect(storage.update).toHaveBeenCalledTimes(2);
+    const [first, second] = storage.update.mock.calls;
+    expect(first[1].status).toBe("draft");
+    expect(first[1].ingredients).toHaveLength(7);
+    expect(first[1].ingredients[4]).toMatchObject({ name: "Preservative INS 211", rationale: "r:Preservative INS 211", isOverride: false });
+    expect(first[1].summary).toMatch(/7 ingredients analyzed from Open Food Facts/);
+    expect(second[1]).toEqual({ status: "published", publishedAt: "2026-09-14T10:00:00Z" });
+  });
+
+  it("a failed ingredient write leaves the product OFF the catalog, never live and empty (R2-25)", async () => {
+    const { post, storage } = setup({ failInsertOnce: true });
+    const res = await post({ ingredientsText: MOUNTAIN_DEW, apply: true });
+    expect(res.status).toBe(500);
+    expect(res.body.heldAfterWriteFailure).toBe(true);
+    expect(storage.update.mock.calls.every(([, input]) => input.status !== "published")).toBe(true);
+  });
+
+  it("a failed ANALYSIS writes nothing — the product stays exactly as it was", async () => {
+    const { post, storage } = setup({ analysisThrows: true });
+    const res = await post({ ingredientsText: MOUNTAIN_DEW, apply: true });
+    expect(res.status).toBe(500);
+    expect(res.body.heldAfterWriteFailure).toBe(false);
+    expect(storage.update).not.toHaveBeenCalled();
   });
 
   it("unpublishes a published product whose repaired list fails the gate", async () => {
-    const { app, storage } = setup({ confidence: 0.5 });
-    const res = await request(app).post("/api/admin/products/p1/reingest").send({ ingredientsText: MOUNTAIN_DEW });
+    const { post, storage } = setup({ confidence: 0.5 });
+    const res = await post({ ingredientsText: MOUNTAIN_DEW, apply: true });
     expect(res.body.before.status).toBe("published");
     expect(res.body.after.status).toBe("draft");
     expect(res.body.after.gate.reasons.join()).toMatch(/low confidence/);
+    expect(storage.update).toHaveBeenCalledTimes(1);
     expect(storage.update.mock.calls[0][1].status).toBe("draft");
   });
 
   it("a damaged label is held without spending AI calls or writing junk analyses", async () => {
-    const { app, ai, storage } = setup();
-    const res = await request(app)
-      .post("/api/admin/products/p1/reingest")
-      .send({ ingredientsText: "Sugar, RAISING AGENTS [ 503 (ii), 10 (ii) ]", dryRun: true });
+    const { post, ai, storage } = setup();
+    const res = await post({ ingredientsText: "Sugar, RAISING AGENTS [ 503 (ii), 10 (ii) ]" });
     expect(res.body.after.status).toBe("draft");
     expect(res.body.after.gate.reasons.join()).toMatch(/label text is damaged.*10 ii/);
     expect(ai.analyzeIngredients).not.toHaveBeenCalled();
@@ -107,31 +146,49 @@ describe("POST /api/admin/products/:id/reingest", () => {
   });
 
   it("applying a damaged label unpublishes but keeps the current rows for review", async () => {
-    const { app, ai, storage } = setup();
-    const res = await request(app)
-      .post("/api/admin/products/p1/reingest")
-      .send({ ingredientsText: "Sugar, RAISING AGENTS [ 503 (ii), 10 (ii) ]" });
+    const { post, ai, storage } = setup();
+    const res = await post({ ingredientsText: "Sugar, RAISING AGENTS [ 503 (ii), 10 (ii) ]", apply: true });
     expect(res.body.written).toBe(true);
     expect(ai.analyzeIngredients).not.toHaveBeenCalled();
     expect(storage.update).toHaveBeenCalledWith("p1", { status: "draft" });
   });
 
+  it("a label longer than the 50-ingredient cap is held, never published truncated (R2-28)", async () => {
+    const { post, ai } = setup();
+    const long = Array.from({ length: 55 }, (_, i) => `Ingredient Number ${String.fromCharCode(65 + (i % 26))}${String.fromCharCode(65 + Math.floor(i / 26))}`).join(", ");
+    const res = await post({ ingredientsText: long });
+    expect(res.body.after.status).toBe("draft");
+    expect(res.body.after.gate.reasons.join()).toMatch(/55 ingredients > 50/);
+    expect(ai.analyzeIngredients).not.toHaveBeenCalled();
+  });
+
+  it("promoting a DRAFT that duplicates a live product keeps it a draft (R2-30)", async () => {
+    const draft = {
+      id: "p1", name: "Glow & Lovely Serum", brand: "Glow & Lovely", status: "draft", productType: "cosmetic",
+      imageUrl: "https://images.openbeautyfacts.org/images/products/890/910/603/0534/front_en.3.400.jpg",
+      publishedAt: null, ingredients: [],
+    };
+    const { post, storage } = setup({ product: draft, duplicate: true });
+    const res = await post({ ingredientsText: "Water, Niacinamide, Glycerin, Stearic Acid" });
+    expect(res.body.after.status).toBe("draft");
+    expect(res.body.after.gate.reasons.join()).toMatch(/duplicate: barcode 8909106030534/);
+    expect(storage.hasBarcode).toHaveBeenCalledWith("8909106030534", "p1"); // never matches itself
+  });
+
   it("an operator hold keeps the product a draft even when the gate passes", async () => {
-    const { app, storage } = setup();
-    const res = await request(app)
-      .post("/api/admin/products/p1/reingest")
-      .send({ ingredientsText: MOUNTAIN_DEW, hold: "label truncated on OFF" });
-    expect(res.body.after.gate.publish).toBe(true);
+    const { post, storage } = setup();
+    const res = await post({ ingredientsText: MOUNTAIN_DEW, hold: "label truncated on OFF", apply: true });
     expect(res.body.after.status).toBe("draft");
     expect(res.body.after.gate.held).toBe("label truncated on OFF");
+    expect(storage.update).toHaveBeenCalledTimes(1);
     expect(storage.update.mock.calls[0][1].status).toBe("draft");
   });
 
   it("rejects bad input", async () => {
-    const { app } = setup();
-    expect((await request(app).post("/api/admin/products/p1/reingest").send({})).status).toBe(400);
-    expect((await request(app).post("/api/admin/products/p1/reingest").send({ ingredientsText: "12, 34" })).status).toBe(422);
+    const { post } = setup();
+    expect((await post({})).status).toBe(400);
+    expect((await post({ ingredientsText: "12, 34" })).status).toBe(422);
     const missing = setup({ product: null });
-    expect((await request(missing.app).post("/api/admin/products/nope/reingest").send({ ingredientsText: MOUNTAIN_DEW })).status).toBe(404);
+    expect((await missing.post({ ingredientsText: MOUNTAIN_DEW })).status).toBe(404);
   });
 });

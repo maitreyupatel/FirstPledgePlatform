@@ -56,7 +56,9 @@ export function brandKey(brand: string): string {
     .replace(/['’`]s\b/g, "")
     .replace(/[^a-z0-9\s]/g, "")
     .split(/\s+/)
-    .filter((w) => w && w !== "the")
+    // "&" is stripped as punctuation, so the word "and" must go too:
+    // "Dot & Key" and "Dot and key" are one brand
+    .filter((w) => w && w !== "the" && w !== "and")
     .map((w) => (w.length >= 4 ? w.replace(/s$/, "") : w))
     .join("");
 }

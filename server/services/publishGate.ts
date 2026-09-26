@@ -47,11 +47,16 @@ export interface GateResult {
   reasons: string[];
 }
 
-export function evaluatePublishGate(analyses: GateInput[]): GateResult {
+export function evaluatePublishGate(analyses: GateInput[], opts: { totalParsed?: number } = {}): GateResult {
   if (analyses.length === 0) return { publish: false, overallConfidence: 0, reasons: ["no ingredients"] };
 
   const overallConfidence = analyses.reduce((sum, a) => sum + a.confidence, 0) / analyses.length;
   const reasons: string[] = [];
+  // Never publish a cut-down list: ingredients past the analysis cap (and
+  // any damage among them) would be silently missing from the report.
+  if (opts.totalParsed !== undefined && opts.totalParsed > analyses.length) {
+    reasons.push(`label lists ${opts.totalParsed} ingredients; only ${analyses.length} analyzed`);
+  }
   if (overallConfidence < 0.7) reasons.push(`overall confidence ${overallConfidence.toFixed(2)} < 0.70`);
 
   const banned = analyses.filter((a) => a.status === "banned").map((a) => a.name);

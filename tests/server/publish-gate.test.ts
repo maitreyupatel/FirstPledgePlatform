@@ -47,4 +47,12 @@ describe("evaluatePublishGate", () => {
   it("never publishes an empty list", () => {
     expect(evaluatePublishGate([]).publish).toBe(false);
   });
+
+  it("holds a list cut down by the analysis cap — the tail would be silently missing (R2-28)", () => {
+    const fifty = Array.from({ length: 50 }, (_, i) => ok(`Ingredient ${i}`));
+    const g = evaluatePublishGate(fifty, { totalParsed: 55 });
+    expect(g.publish).toBe(false);
+    expect(g.reasons.join()).toMatch(/55 ingredients; only 50 analyzed/);
+    expect(evaluatePublishGate(fifty, { totalParsed: 50 }).publish).toBe(true);
+  });
 });

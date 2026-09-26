@@ -230,7 +230,7 @@ export function buildCronRouter(
         // One gate for the cron and the admin re-ingest (services/publishGate.ts):
         // overall confidence >= 0.7, no banned ingredient, none below 0.6,
         // no garbled name.
-        const gate = evaluatePublishGate(analyses);
+        const gate = evaluatePublishGate(analyses, { totalParsed: ingredientNames.length });
         const shouldPublish = gate.publish;
         const overallConfidence = gate.overallConfidence;
 
@@ -318,28 +318,35 @@ export function buildCronRouter(
     const cutoff = new Date(Date.now() - refreshDays * 24 * 60 * 60 * 1000).toISOString();
     const { stopAfterMs, fetchLimit } = computeRefreshBudget(process.env.CRON_BUDGET_MS);
 
-    const { data: staleRows, error } = await supabase
-      .from("ingredient_analyses")
-      .select("ingredient_name, product_type")
-      .lt("last_analyzed_at", cutoff)
-      .order("last_analyzed_at", { ascending: true })
-      // Over-fetch: orphaned legacy rows are filtered out below
-      .limit(fetchLimit * 3);
-
-    if (error) {
-      console.error("[cron/refresh-stale-ingredients] DB error:", error);
-      await finishRun(runId, "error", {}, { error: error.message });
-      res.status(500).json({ error: error.message });
-      return;
-    }
-
     // A row whose name is not its own cache key was written under an older
     // key scheme ("preservative-e211", now "ins 211"). Nothing reads it any
-    // more, and refreshing it only rewrites the canonical row — it would stay
-    // the "oldest stale" row forever and starve real refreshes. Skip it.
-    const staleRows_ = ((staleRows ?? []) as Array<{ ingredient_name: string; product_type: string }>)
-      .filter((row) => analysisCacheKey(row.ingredient_name) === row.ingredient_name)
-      .slice(0, fetchLimit);
+    // more, and refreshing it only rewrites the canonical row, so it would
+    // stay the "oldest stale" row forever. Page past such rows until enough
+    // real ones are collected — a fixed over-fetch would eventually be all
+    // legacy rows and refresh nothing while reporting ok (review round 2).
+    type StaleRow = { ingredient_name: string; product_type: string };
+    const staleRows_: StaleRow[] = [];
+    const PAGE = Math.max(fetchLimit * 3, 30);
+    for (let page = 0; page < 10 && staleRows_.length < fetchLimit; page++) {
+      const { data: rows, error } = await supabase
+        .from("ingredient_analyses")
+        .select("ingredient_name, product_type")
+        .lt("last_analyzed_at", cutoff)
+        .order("last_analyzed_at", { ascending: true })
+        .range(page * PAGE, page * PAGE + PAGE - 1);
+      if (error) {
+        console.error("[cron/refresh-stale-ingredients] DB error:", error);
+        await finishRun(runId, "error", {}, { error: error.message });
+        res.status(500).json({ error: error.message });
+        return;
+      }
+      const batch = (rows ?? []) as StaleRow[];
+      for (const row of batch) {
+        if (staleRows_.length >= fetchLimit) break;
+        if (analysisCacheKey(row.ingredient_name) === row.ingredient_name) staleRows_.push(row);
+      }
+      if (batch.length < PAGE) break; // no more stale rows
+    }
     console.log(`[cron/refresh-stale-ingredients] ${staleRows_.length} stale ingredients to refresh`);
 
     if (staleRows_.length === 0) {

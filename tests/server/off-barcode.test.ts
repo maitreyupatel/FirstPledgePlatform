@@ -5,7 +5,8 @@ describe("OFF barcode <-> image path", () => {
   it("splits long codes 3/3/3/rest like OFF's image folders", () => {
     expect(offImagePath("8901764032912")).toBe("890/176/403/2912");
     expect(offImagePath("0000089080153")).toBe("000/008/908/0153");
-    expect(offImagePath("12345678")).toBe("12345678");
+    // EAN-8: OFF zero-pads to 13 digits (live Maggi draft 89080153)
+    expect(offImagePath("89080153")).toBe("000/008/908/0153");
     expect(offImagePath("1234")).toBeNull();
   });
 

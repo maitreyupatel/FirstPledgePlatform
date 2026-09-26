@@ -39,6 +39,9 @@ describe("brandKey — one brand, many spellings", () => {
     expect(brandKey("Lay's")).toBe(brandKey("Lays"));
     expect(brandKey("D'lecta")).toBe("dlecta");
     expect(brandKey("The Whole Truth")).toBe("wholetruth");
+    // live catalog brands "Dot and key", "Love beauty and planet"
+    expect(brandKey("Dot & Key")).toBe(brandKey("Dot and key"));
+    expect(brandKey("Love Beauty & Planet")).toBe(brandKey("Love beauty and planet"));
   });
 
   it("keeps distinct brands distinct — every word counts (review: first-word keys merged companies)", () => {
