@@ -45,18 +45,20 @@ function tokenize(name: string): string[] {
  * Brand identity for dedup. "Haldiram's", "Haldiram" and "HALDIRAMS" are
  * one brand — observed live: "Moong Dal (Haldiram's)" and "Haldiram moong
  * dal (Haldiram)" were BOTH published because dedup fetched candidates by
- * exact brand and never compared the two. Lowercased, possessive and
- * punctuation stripped, first significant word, trailing plural "s" folded.
+ * exact brand and never compared the two. Every word counts — "Parle" and
+ * "Parle Agro", "Tops" and "Top Ramen" are different companies — with the
+ * possessive, punctuation, case and a trailing plural "s" folded per word.
+ * "" for a brand with no Latin letters (callers fall back to exact match).
  */
 export function brandKey(brand: string): string {
-  const words = brand
+  return brand
     .toLowerCase()
     .replace(/['’`]s\b/g, "")
     .replace(/[^a-z0-9\s]/g, "")
     .split(/\s+/)
-    .filter((w) => w && w !== "the");
-  const first = words[0] ?? "";
-  return first.length >= 4 ? first.replace(/s$/, "") : first;
+    .filter((w) => w && w !== "the")
+    .map((w) => (w.length >= 4 ? w.replace(/s$/, "") : w))
+    .join("");
 }
 
 /**

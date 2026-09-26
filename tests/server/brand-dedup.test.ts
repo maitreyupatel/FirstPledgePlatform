@@ -37,14 +37,17 @@ describe("brandKey — one brand, many spellings", () => {
   it("folds possessives, punctuation, case and a trailing plural s", () => {
     for (const b of ["Haldiram's", "Haldiram", "HALDIRAMS", "haldiram’s"]) expect(brandKey(b)).toBe("haldiram");
     expect(brandKey("Lay's")).toBe(brandKey("Lays"));
-    expect(brandKey("ching's")).toBe(brandKey("Ching secret"));
     expect(brandKey("D'lecta")).toBe("dlecta");
-    expect(brandKey("The Whole Truth")).toBe("whole");
+    expect(brandKey("The Whole Truth")).toBe("wholetruth");
   });
 
-  it("keeps distinct brands distinct", () => {
+  it("keeps distinct brands distinct — every word counts (review: first-word keys merged companies)", () => {
     expect(brandKey("Amul")).not.toBe(brandKey("Britannia"));
-    expect(brandKey("Kissan")).not.toBe(brandKey("Knorr"));
+    expect(brandKey("Parle")).not.toBe(brandKey("Parle Agro"));
+    expect(brandKey("Tops")).not.toBe(brandKey("Top Ramen"));
+    expect(brandKey("Organic India")).not.toBe(brandKey("Organic Tattva"));
+    expect(brandKey("Mother Dairy")).not.toBe(brandKey("Mother's Recipe"));
+    expect(brandKey("Dr. Oetker")).not.toBe(brandKey("Dr. Morepen"));
   });
 
   it("search prefix is the brand's leading letters as typed", () => {
@@ -71,6 +74,15 @@ describe("hasSimilarProduct — brand-variant duplicates", () => {
 
   it("does not flag the same product name under a different brand", async () => {
     expect(await hasSimilar([{ name: "Moong Dal", brand: "Bikaji" }], "Moong Dal", "Haldiram")).toBe(false);
+  });
+
+  it("does not skip a different company's product that shares a first word (Parle vs Parle Agro)", async () => {
+    expect(await hasSimilar([{ name: "Mango Drink", brand: "Parle" }], "Mango Drink", "Parle Agro")).toBe(false);
+  });
+
+  it("still dedups brands with no Latin prefix, via the exact brand (review: '&Me', Devanagari)", async () => {
+    expect(await hasSimilar([{ name: "Pasteurised Butter", brand: "अमूल" }], "Amul Pasteurized Butter", "अमूल")).toBe(true);
+    expect(await hasSimilar([{ name: "Chocolate Protein Bar", brand: "&Me" }], "Protein Bar Chocolate", "&Me")).toBe(true);
   });
 
   it("treats LIKE metacharacters in the brand literally (E4.5)", async () => {

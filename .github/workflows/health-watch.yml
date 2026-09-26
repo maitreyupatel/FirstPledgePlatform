@@ -31,8 +31,22 @@ jobs:
           RUN_AT=$(echo "$BODY" | jq -r '.ingest.lastRunAt // empty')
           RUN_HOURS=$(echo "$BODY" | jq -r '.ingest.hoursSinceLastRun // empty')
           RUN_OUTCOME=$(echo "$BODY" | jq -r '.ingest.lastOutcome // empty')
+          CATALOG=$(echo "$BODY" | jq -c '.catalog // empty')
+          CATALOG_ERR=$(echo "$BODY" | jq -r '.catalog.error // empty')
+          INGEST_ERR=$(echo "$BODY" | jq -r '.ingest.error // empty')
           if [ "$STATUS" != "ok" ]; then
             echo "::error::Health status is '$STATUS' (expected ok)"
+            exit 1
+          fi
+          # A failed read must never pass as "no data yet": the API answers
+          # ok while every DB call fails (e.g. a rotated service-role key not
+          # yet updated in the Vercel env).
+          if [ -z "$CATALOG" ] || [ -n "$CATALOG_ERR" ]; then
+            echo "::error::/api/health could not read the catalog — DB unreachable or credentials wrong."
+            exit 1
+          fi
+          if [ -n "$INGEST_ERR" ]; then
+            echo "::error::/api/health could not read the cron run log (ingest_runs)."
             exit 1
           fi
           # Vercel fires the cron within the 09:00 UTC hour and this watch runs

@@ -20,6 +20,7 @@ import { AIVettingService } from "./services/aiVettingService";
 import { CitationService } from "./services/citationService";
 import { requireAuth, optionalAuth } from "./middleware/auth";
 import { buildCronRouter } from "./routes/cron";
+import { buildAdminReingestRouter } from "./routes/adminReingest";
 import { summarizeIngestRun } from "./services/ingestTelemetry";
 import { fromZodError } from "zod-validation-error";
 import {
@@ -197,7 +198,10 @@ app.get("/api/health", async (_req, res) => {
 let healthMemo: { at: number; body: Record<string, unknown> } | null = null;
 
 async function computeHealthBody(now: number): Promise<Record<string, unknown>> {
-  let catalog: Record<string, unknown> | undefined;
+  // A failed read is reported as { error: "unavailable" }, never as an
+  // absent field: "the DB is unreachable" must not look like "no run log
+  // yet" to the watch (review 2026-09-26). Liveness still answers ok.
+  let catalog: Record<string, unknown>;
   try {
     // Freshness over ALL statuses (E4.10): a draft is a successful ingest,
     // so counting only published rows read draft-heavy days as an outage.
@@ -207,16 +211,18 @@ async function computeHealthBody(now: number): Promise<Record<string, unknown>> 
     const stale = f.lastCreatedAt !== null && now - new Date(f.lastCreatedAt).getTime() > 72 * 60 * 60 * 1000;
     catalog = { ...f, stale };
   } catch {
-    catalog = undefined;
+    catalog = { error: "unavailable" };
   }
   // Latest daily-ingest run (ingest_runs): did the cron actually RUN, and
   // how did it end? Outcome and timing only — run detail is admin-only.
-  let ingest: ReturnType<typeof summarizeIngestRun> | null = null;
+  // Scheduled runs only: an operator's manual run must not stand in for a
+  // missed Vercel invocation.
+  let ingest: ReturnType<typeof summarizeIngestRun> | { error: string } | null;
   try {
-    const run = await getStorage().lastIngestRun("daily-ingest");
+    const run = await getStorage().lastIngestRun("daily-ingest", { scheduledOnly: true });
     ingest = run ? summarizeIngestRun(run, now) : null;
   } catch {
-    ingest = null; // liveness must not depend on telemetry
+    ingest = { error: "unavailable" };
   }
   return { catalog, ingest };
 }
@@ -693,6 +699,8 @@ app.get("/api/admin/cron-status", requireAuth, async (_req, res) => {
 // Cron routes — protected by CRON_SECRET, invoked by Vercel scheduler
 // Pass getStorage as a lazy getter so cron routes only init storage on first request
 app.use("/api/cron", buildCronRouter(aiVettingService, getStorage));
+// Admin: re-run a stored product through the ingest parse → analyze → gate path
+app.use("/api/admin", buildAdminReingestRouter(aiVettingService, getStorage));
 
 const assetsDirectory = path.resolve(
   __dirname,

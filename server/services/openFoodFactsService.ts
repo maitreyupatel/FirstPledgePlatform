@@ -129,10 +129,12 @@ export class OpenFoodFactsService {
    * an empty day beats backfilling with foreign-market products.
    *
    * @param checkExists - optional async fn; returns true if product is already in DB.
+   *   Receives the barcode too: the same barcode under a different brand
+   *   string ("sprite" vs "Coca-Cola") is the same product.
    */
   async fetchDailyProducts(
     count: number = 2,
-    checkExists?: (name: string, brand: string) => Promise<boolean>
+    checkExists?: (name: string, brand: string, barcode: string) => Promise<boolean>
   ): Promise<OFFProduct[]> {
     const dayOfYear = Math.floor(
       (Date.now() - new Date(new Date().getFullYear(), 0, 0).getTime()) / 86400000
@@ -198,7 +200,7 @@ export class OpenFoodFactsService {
           console.log(`[OFF] Skip "${p.name}" (${p.brand}) — ${parsedCount} parsed ingredients, likely garbled label`);
           continue;
         }
-        if (checkExists && (await checkExists(p.name, p.brand))) {
+        if (checkExists && (await checkExists(p.name, p.brand, p.barcode))) {
           console.log(`[OFF] Skip "${p.name}" — already in DB`);
           continue;
         }

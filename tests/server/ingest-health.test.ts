@@ -9,7 +9,7 @@
  */
 import { describe, it, expect, vi } from "vitest";
 import request from "supertest";
-import { ingestOutcome, summarizeIngestRun } from "../../server/services/ingestTelemetry";
+import { ingestOutcome, summarizeIngestRun, ingestTriggerOf } from "../../server/services/ingestTelemetry";
 
 const HOUR = 3_600_000;
 
@@ -61,14 +61,20 @@ describe("summarizeIngestRun", () => {
 const state: {
   freshness: { published: number; drafts: number; lastCreatedAt: string | null; lastPublishedAt: string | null };
   lastRun: unknown;
+  catalogThrows?: boolean;
+  runLogThrows?: boolean;
+  lastRunOpts?: unknown;
 } = { freshness: { published: 0, drafts: 0, lastCreatedAt: null, lastPublishedAt: null }, lastRun: null };
 
 vi.mock("../../server/storage/supabaseStorage.js", () => ({
   SupabaseStorage: class {
     async catalogFreshness() {
+      if (state.catalogThrows) throw new Error("db unreachable");
       return state.freshness;
     }
-    async lastIngestRun() {
+    async lastIngestRun(_job: string, opts?: unknown) {
+      state.lastRunOpts = opts;
+      if (state.runLogThrows) throw new Error("db unreachable");
       return state.lastRun;
     }
     // The pre-fix health path read these — published rows only — so the
@@ -132,5 +138,30 @@ describe("GET /api/health — freshness over all statuses + latest run", () => {
     const body = await health();
     expect(body.status).toBe("ok");
     expect(body.ingest).toBeNull();
+  });
+});
+
+describe("GET /api/health — failed reads are visible (review 2026-09-26)", () => {
+  it("an unreadable catalog is reported as an error, not as a missing field", async () => {
+    state.catalogThrows = true;
+    state.runLogThrows = true;
+    const body = await health();
+    state.catalogThrows = false;
+    state.runLogThrows = false;
+    expect(body.status).toBe("ok"); // liveness still answers
+    expect(body.catalog).toEqual({ error: "unavailable" });
+    expect(body.ingest).toEqual({ error: "unavailable" });
+  });
+
+  it("asks for the latest SCHEDULED run — a manual run cannot hide a missed schedule", async () => {
+    state.lastRun = null;
+    await health();
+    expect(state.lastRunOpts).toEqual({ scheduledOnly: true });
+  });
+
+  it("identifies Vercel's scheduler by its user agent", () => {
+    expect(ingestTriggerOf("vercel-cron/1.0")).toBe("schedule");
+    expect(ingestTriggerOf("curl/8.4.0")).toBe("manual");
+    expect(ingestTriggerOf(undefined)).toBe("manual");
   });
 });

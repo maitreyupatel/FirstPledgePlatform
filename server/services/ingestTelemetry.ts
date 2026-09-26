@@ -4,6 +4,13 @@
  */
 
 export type IngestJob = "daily-ingest" | "refresh-stale-ingredients";
+/** Vercel's scheduler vs an operator's manual invocation (migration 011). */
+export type IngestTrigger = "schedule" | "manual";
+
+/** Vercel cron requests carry `user-agent: vercel-cron/1.0`. */
+export function ingestTriggerOf(userAgent: unknown): IngestTrigger {
+  return /vercel-cron/i.test(String(userAgent ?? "")) ? "schedule" : "manual";
+}
 export type IngestOutcome = "running" | "ok" | "partial" | "error" | "no_candidates";
 
 export interface IngestRunCounts {

@@ -2,11 +2,13 @@ import { randomUUID } from "node:crypto";
 import { createClient } from "@supabase/supabase-js";
 import { namesLookAlike, brandKey, brandSearchPrefix } from "../utils/nameSimilarity.js";
 import { escapeLike } from "../utils/likeEscape.js";
+import { offImagePath } from "../utils/offBarcode.js";
 import type {
   IngestJob,
   IngestOutcome,
   IngestRunCounts,
   IngestRunRecord,
+  IngestTrigger,
 } from "../services/ingestTelemetry.js";
 import {
   Ingredient,
@@ -165,9 +167,9 @@ export class SupabaseStorage {
   // ── Cron run telemetry (ingest_runs, migration 010) ─────────────────────
   // Fail-open throughout: telemetry must never break or slow ingestion.
 
-  async startIngestRun(job: IngestJob): Promise<string | null> {
+  async startIngestRun(job: IngestJob, trigger: IngestTrigger = "manual"): Promise<string | null> {
     try {
-      const { data, error } = await this.supabase.from("ingest_runs").insert({ job }).select("id").single();
+      const { data, error } = await this.supabase.from("ingest_runs").insert({ job, trigger }).select("id").single();
       if (error) throw new Error(error.message);
       return (data as any).id as string;
     } catch (err) {
@@ -204,21 +206,36 @@ export class SupabaseStorage {
     }
   }
 
-  async lastIngestRun(job: IngestJob): Promise<IngestRunRecord | null> {
-    try {
-      const { data, error } = await this.supabase
-        .from("ingest_runs")
-        .select("job, started_at, finished_at, outcome")
-        .eq("job", job)
-        .order("started_at", { ascending: false })
-        .limit(1)
-        .maybeSingle();
-      if (error || !data) return null;
-      const row = data as any;
-      return { job: row.job, startedAt: row.started_at, finishedAt: row.finished_at, outcome: row.outcome };
-    } catch {
-      return null;
-    }
+  /**
+   * Latest run of a job — by default the latest SCHEDULED run, so an
+   * operator's manual run cannot hide a missed Vercel invocation. Returns
+   * null only when there are no rows; a failed read THROWS, so health can
+   * tell "no run log yet" from "the run log is unreadable".
+   */
+  async lastIngestRun(job: IngestJob, opts: { scheduledOnly?: boolean } = { scheduledOnly: true }): Promise<IngestRunRecord | null> {
+    let q = this.supabase.from("ingest_runs").select("job, started_at, finished_at, outcome").eq("job", job);
+    if (opts.scheduledOnly) q = q.eq("trigger", "schedule");
+    const { data, error } = await q.order("started_at", { ascending: false }).limit(1).maybeSingle();
+    if (error) throw new Error(`lastIngestRun failed: ${error.message}`);
+    if (!data) return null;
+    const row = data as any;
+    return { job: row.job, startedAt: row.started_at, finishedAt: row.finished_at, outcome: row.outcome };
+  }
+
+  /**
+   * True when a product with this OFF barcode is already stored. The table
+   * has no barcode column, but OFF image URLs encode it — the same barcode
+   * under two brand strings ("sprite" / "Coca-Cola") is the same product.
+   */
+  async hasBarcode(barcode: string): Promise<boolean> {
+    const path = offImagePath(barcode);
+    if (!path) return false;
+    const { data, error } = await this.supabase
+      .from("products")
+      .select("id")
+      .ilike("image_url", `%/images/products/${escapeLike(path)}/%`)
+      .limit(1);
+    return !error && !!data && data.length > 0;
   }
 
   /** Admin view: recent runs with counts and per-product detail. */
@@ -246,16 +263,19 @@ export class SupabaseStorage {
     // published). namesLookAlike still decides whether it is the same product.
     const key = brandKey(brand);
     const prefix = brandSearchPrefix(brand);
-    if (!key || !prefix) return false;
+    // No Latin prefix ("&Me", Devanagari brands): the old exact brand match,
+    // never "no dedup at all"
+    const pattern = prefix ? `${escapeLike(prefix)}%` : escapeLike(brand.trim());
+    if (!pattern) return false;
+    const sameBrand = (rowBrand: string) =>
+      key ? brandKey(rowBrand) === key : rowBrand.trim().toLowerCase() === brand.trim().toLowerCase();
     const { data, error } = await this.supabase
       .from("products")
       .select("name, brand")
-      .ilike("brand", `${escapeLike(prefix)}%`)
+      .ilike("brand", pattern)
       .limit(200);
     if (error || !data) return false;
-    return data.some(
-      (row: any) => brandKey(String(row.brand)) === key && namesLookAlike(String(row.name), name),
-    );
+    return data.some((row: any) => sameBrand(String(row.brand)) && namesLookAlike(String(row.name), name));
   }
 
   async findByNameAndBrand(name: string, brand: string): Promise<Product | null> {
