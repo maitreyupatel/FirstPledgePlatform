@@ -8,7 +8,9 @@ import { GeminiProvider } from "./providers/geminiProvider";
 import { OpenAIProvider } from "./providers/openaiProvider";
 import { GroqProvider } from "./providers/groqProvider";
 import { CompoundResearchService } from "./providers/compoundResearchService";
-import { canonicalIngredientKey } from "../utils/additiveCode";
+import { parseAdditiveCode } from "../utils/additiveCode";
+import { analysisCacheKey } from "../utils/cacheKey";
+import { looksGarbledIngredientName } from "../utils/ingredientParser";
 
 export interface IngredientAnalysis {
   name: string;
@@ -110,7 +112,7 @@ export class AIVettingService {
   private inFlight = new Map<string, Promise<IngredientAnalysis>>();
 
   private analysisKey(ingredientName: string, productType: ProductType): string {
-    return `${canonicalIngredientKey(ingredientName)}|${productType}`;
+    return `${analysisCacheKey(ingredientName)}|${productType}`;
   }
 
   async analyzeIngredient(ingredientName: string, productType: ProductType = "cosmetic"): Promise<IngredientAnalysis> {
@@ -125,7 +127,30 @@ export class AIVettingService {
       }
     }
 
-    return this.analyzeFresh(ingredientName, productType);
+    // Coalesced and wording-neutral results carry THIS caller's wording
+    return { ...(await this.analyzeFresh(ingredientName, productType)), name: ingredientName };
+  }
+
+  /**
+   * The name a coded food additive is analyzed under. Every wording of one
+   * code shares one cached analysis, so its rationale must describe the
+   * SUBSTANCE, not whichever label wording missed the cache first:
+   * "Acidity Regulator Acetic Acid INS 260" and "acidity regulator-E260"
+   * are both analyzed as "Acetic Acid INS 260". A bare cache key from the
+   * refresh cron ("ins 1520") gets a hint instead of a lone number.
+   * Damaged names are isolated (own cache key) and analyzed as written.
+   */
+  private neutralAdditiveName(name: string): string {
+    if (looksGarbledIngredientName(name)) return name;
+    const parsed = parseAdditiveCode(name);
+    if (!parsed) return name;
+    const code = `INS ${parsed.code}${parsed.qualifier ? `(${parsed.qualifier})` : ""}`;
+    let identity = this.foodSafetyService.registryIdentity(parsed.code);
+    // "Sodium Carbonates (Baking Soda family)", "Tartaric Acid (L(+)-)"
+    while (identity && /\([^()]*\)/.test(identity)) identity = identity.replace(/\s*\([^()]*\)/g, "");
+    const neutral = identity ? `${identity.trim()} ${code}` : /^ins\s/i.test(name.trim()) ? `Food Additive ${code}` : name;
+    // Must stay clean and on the same cache row, else analyze as written
+    return !looksGarbledIngredientName(neutral) && analysisCacheKey(neutral) === analysisCacheKey(name) ? neutral : name;
   }
 
   /**
@@ -147,7 +172,7 @@ export class AIVettingService {
     }
 
     const promise = (isFoodContext
-      ? this.analyzeFoodIngredient(ingredientName, productType)
+      ? this.analyzeFoodIngredient(this.neutralAdditiveName(ingredientName), productType)
       : this.analyzeCosmeticIngredient(ingredientName, productType)
     ).finally(() => this.inFlight.delete(key));
 
@@ -421,7 +446,7 @@ export class AIVettingService {
       }
       await this.cacheResult(item.name, productType, result);
 
-      map.set(canonicalIngredientKey(item.name), result);
+      map.set(analysisCacheKey(item.name), result);
     }
     return map;
   }
@@ -517,7 +542,7 @@ export class AIVettingService {
     // uncached ingredients in ONE model call, removing per-ingredient pacing
     // delays. Falls back to the sequential loop on any failure.
     if (process.env.BATCH_ANALYSIS === "true" && this.aiProvider instanceof GroqProvider) {
-      const keyOf = canonicalIngredientKey;
+      const keyOf = analysisCacheKey;
       const seen = new Set<string>();
       const uncachedNames = ingredientNames.filter((n) => {
         const k = keyOf(n);
@@ -542,7 +567,7 @@ export class AIVettingService {
 
     for (let i = 0; i < ingredientNames.length; i++) {
       const name = ingredientNames[i];
-      const cacheKey = canonicalIngredientKey(name);
+      const cacheKey = analysisCacheKey(name);
 
       const hit = cached.get(cacheKey);
       const isCacheHit = !!(hit && (!this.analysisService || !this.analysisService.shouldRefreshAnalysis(hit)));
@@ -557,7 +582,8 @@ export class AIVettingService {
         if (deadlineExceeded()) {
           throw new Error(`Analysis deadline exceeded after ${analyses.length}/${ingredientNames.length} ingredients — retry will resume from cache`);
         }
-        analysis = await this.analyzeFresh(name, productType);
+        // A coalesced or wording-neutral result carries THIS label's wording
+        analysis = { ...(await this.analyzeFresh(name, productType)), name };
         // Duplicate names later in the list reuse this result instead of
         // paying for a second AI call.
         cached.set(cacheKey, analysis);

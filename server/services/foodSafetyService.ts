@@ -184,6 +184,14 @@ export class FoodSafetyService {
     this.googleCxId = googleCxId;
   }
 
+  /**
+   * Verified identity for an additive code ("415" → "Xanthan Gum"), from the
+   * static registry only — synchronous, never a network search.
+   */
+  registryIdentity(code: string): string | null {
+    return this.lookupByENumber(`e${code}`)?.name ?? null;
+  }
+
   async lookupFoodIngredient(ingredientName: string): Promise<FoodSafetyData> {
     // Try E-number lookup first (instant, no API call)
     const eNumber = this.parseENumber(ingredientName);
@@ -249,12 +257,23 @@ export class FoodSafetyService {
       const phrase = entry.name.toLowerCase().split(/[\/,(]/)[0].trim();
       if (phrase.length < 4) continue;
       const escaped = phrase.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-      if (new RegExp(`\\b${escaped}\\b`).test(lower)) {
+      const re = new RegExp(`\\b${escaped}\\b`);
+      // The phrase must BE the ingredient, not part of a longer one: an
+      // identity is injected as "VERIFIED … do not reinterpret", so
+      // "Calcium Lactate Gluconate" must not become Calcium Lactate, nor
+      // "Rosemary Extract and Mixed Tocopherols" Mixed Tocopherols.
+      if (re.test(lower) && FoodSafetyService.NAME_FILLER.test(lower.replace(re, " "))) {
         return entry;
       }
     }
     return null;
   }
+
+  // What may surround a registry phrase in a name that IS that additive:
+  // its functional class, qualifiers and code — "Acidity Regulator Citric
+  // Acid INS 330", "Antioxidant Mixed Tocopherols".
+  private static readonly NAME_FILLER =
+    /^[\s,&\-]*(?:(?:acidity|regulators?|anti-?caking|agents?|antioxidants?|emulsifiers?|emulsifying|stabili[sz]ers?|stabili[sz]ing|thickeners?|thickening|preservatives?|class|ii|iii|iv|colou?rs?|flavou?r|enhancers?|sweeteners?|raising|leavening|flour|treatment|firming|gelling|glazing|humectants?|sequeste?rants?|natural|artificial|synthetic|permitted|added|food|and|&|of|origin|vegetable|mineral|ins|e|no\.?|\d{3,4}[a-f]?(?:\([ivx]+\))?)[\s,&\-]*)*$/i;
 
   private async researchFoodIngredient(ingredientName: string): Promise<FoodSafetyData> {
     // Try FDA first (highest authority for food safety)

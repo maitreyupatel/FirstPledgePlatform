@@ -142,7 +142,10 @@ describe("analyzeIngredient — concurrent coalescing", () => {
 
     expect(fakeProvider.analyzeIngredient).toHaveBeenCalledTimes(1);
     expect(fakeAnalysisService.upsertAnalysis).toHaveBeenCalledTimes(1);
-    expect(a).toBe(b); // literally the same resolved object
+    // One shared analysis, each caller under its OWN wording — a coalesced
+    // result used to carry the first caller's name (review 2026-09-26)
+    expect({ ...a, name: "" }).toEqual({ ...b, name: "" });
+    expect([a.name, b.name]).toEqual(["Retinol", "retinol"]);
   });
 
   it("a second call after completion runs fresh again (no stale lock)", async () => {

@@ -1,7 +1,7 @@
 import { createClient } from "@supabase/supabase-js";
 import type { IngredientAnalysis } from "./aiVettingService";
 import type { ProductType } from "@shared/types";
-import { canonicalIngredientKey } from "../utils/additiveCode";
+import { analysisCacheKey } from "../utils/cacheKey";
 
 interface StoredAnalysis {
   id: string;
@@ -44,9 +44,9 @@ export class IngredientAnalysisService {
     this.refreshDays = refreshDays;
   }
 
-  /** Cache key: a coded additive keys on its code, everything else on its lowercased name. */
+  /** Cache key — see server/utils/cacheKey.ts (code-shared, damaged names isolated). */
   normalizeIngredientName(name: string): string {
-    return canonicalIngredientKey(name);
+    return analysisCacheKey(name);
   }
 
   /**
