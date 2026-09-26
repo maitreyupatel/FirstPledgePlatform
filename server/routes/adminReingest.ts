@@ -26,12 +26,28 @@ import { z } from "zod";
 import { fromZodError } from "zod-validation-error";
 import type { AIVettingService } from "../services/aiVettingService";
 import type { SupabaseStorage } from "../storage/supabaseStorage";
+import type { Product } from "@shared/types";
 import { requireAuth } from "../middleware/auth";
 import { parseIngredients, looksGarbledIngredientName } from "../utils/ingredientParser";
 import { barcodeFromImageUrl } from "../utils/offBarcode";
 import { evaluatePublishGate, ingredientInputsFromAnalyses } from "../services/publishGate";
 
 const MAX_INGREDIENTS = 50; // same cap as the daily ingest
+
+/**
+ * SupabaseStorage.update returns null WITHOUT writing when its own read of
+ * the product fails (any transient Supabase error), and the ingredient swap
+ * is not transactional. So every write is confirmed by reading the product
+ * back: status and row count must be what was written, or the call fails.
+ */
+function confirmWrite(p: Product | null, status: string, rows?: number): Product {
+  if (!p) throw new Error("write not confirmed: the product could not be read back");
+  if (p.status !== status) throw new Error(`write not confirmed: status is ${p.status}, expected ${status}`);
+  if (rows !== undefined && p.ingredients.length !== rows) {
+    throw new Error(`write not confirmed: ${p.ingredients.length} ingredient rows, expected ${rows}`);
+  }
+  return p;
+}
 
 const reingestSchema = z
   .object({
@@ -72,8 +88,20 @@ export function buildAdminReingestRouter(
       return;
     }
 
+    // Admin overrides are verdicts a human set; a re-ingest rewrites every
+    // row as a fresh AI verdict and would discard them silently
+    const overrides = product.ingredients.filter((i) => i.isOverride).length;
+    if (apply && overrides > 0) {
+      res.status(409).json({ error: `Product has ${overrides} admin override(s); re-ingest would discard them` });
+      return;
+    }
+
+    // publishedAt is reported because moving a product to draft clears it
+    // (storage semantics) — the report is what can restore it
     const before = {
       status: product.status,
+      publishedAt: product.publishedAt ?? null,
+      overrides,
       ingredients: product.ingredients.map((i) => ({ name: i.name, status: i.status })),
     };
     const report = (after: Record<string, unknown>, written: boolean) => ({
@@ -100,7 +128,7 @@ export function buildAdminReingestRouter(
       ];
       const unpublish = !!apply && product.status !== "draft";
       try {
-        if (unpublish) await storage.update(product.id, { status: "draft" });
+        if (unpublish) confirmWrite(await storage.update(product.id, { status: "draft" }), "draft");
       } catch (error) {
         res.status(500).json({ error: "Reingest failed", details: error instanceof Error ? error.message : String(error) });
         return;
@@ -148,17 +176,34 @@ export function buildAdminReingestRouter(
       // backlog E4.3): write the new rows as a draft first, and publish only
       // once they are in, keeping the original publish date.
       const food = product.productType === "food" || product.productType === "supplement";
+      const rows = ingredientInputsFromAnalyses(analyses, product.productType);
       writeStarted = true;
-      await storage.update(product.id, {
-        status: "draft",
-        ingredients: ingredientInputsFromAnalyses(analyses, product.productType),
-        summary: `AI-vetted via FirstPledge. ${names.length} ingredients analyzed from ${food ? "Open Food Facts" : "Open Beauty Facts"} (ODbL license).`,
-      });
+      let written = confirmWrite(
+        await storage.update(product.id, {
+          status: "draft",
+          ingredients: rows,
+          summary: `AI-vetted via FirstPledge. ${names.length} ingredients analyzed from ${food ? "Open Food Facts" : "Open Beauty Facts"} (ODbL license).`,
+        }),
+        "draft",
+        rows.length,
+      );
       if (status === "published") {
-        await storage.update(product.id, { status: "published", publishedAt: product.publishedAt ?? undefined });
+        written = confirmWrite(
+          await storage.update(product.id, { status: "published", publishedAt: product.publishedAt ?? undefined }),
+          "published",
+          rows.length,
+        );
+        if (product.publishedAt && Date.parse(written.publishedAt ?? "") !== Date.parse(product.publishedAt)) {
+          throw new Error(`write not confirmed: publishedAt is ${written.publishedAt}, expected ${product.publishedAt}`);
+        }
       }
       console.log(`[admin/reingest] "${product.name}" ${product.status} → ${status} (${names.length} ingredients${reasons.length ? `; held: ${reasons.join("; ")}` : ""}${hold ? `; operator hold: ${hold}` : ""})`);
-      res.json(report(after, true));
+      res.json(
+        report(
+          { ...after, verified: { status: written.status, ingredientRows: written.ingredients.length, publishedAt: written.publishedAt ?? null } },
+          true,
+        ),
+      );
     } catch (error) {
       console.error("[admin/reingest] failed:", error);
       // A failed WRITE must not leave the product live half-written; a failed
@@ -166,7 +211,7 @@ export function buildAdminReingestRouter(
       let heldAfterWriteFailure = false;
       if (writeStarted) {
         try {
-          await storage.update(product.id, { status: "draft" });
+          confirmWrite(await storage.update(product.id, { status: "draft" }), "draft");
           heldAfterWriteFailure = true;
         } catch {
           /* reported below */
@@ -175,7 +220,11 @@ export function buildAdminReingestRouter(
       res.status(500).json({
         error: "Reingest failed",
         details: error instanceof Error ? error.message : String(error),
+        before,
         heldAfterWriteFailure,
+        // A write started and the product could not be confirmed as a draft:
+        // its state is unknown — check it by hand before anything else
+        needsManualCheck: writeStarted && !heldAfterWriteFailure,
       });
     }
   });

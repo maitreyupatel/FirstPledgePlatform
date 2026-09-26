@@ -92,3 +92,14 @@ describe("hasSimilarProduct — brand-variant duplicates", () => {
     expect(await hasSimilar(catalog, "Moong Dal", "%")).toBe(false);
   });
 });
+
+describe("hasSimilarProduct — fails closed", () => {
+  it("an unreadable table is an error, never 'no duplicate' (review 2026-09-26)", async () => {
+    const failing = {
+      from: () => ({ select: () => ({ ilike: () => ({ limit: async () => ({ data: null, error: { message: "timeout" } }) }) }) }),
+    };
+    await expect(
+      SupabaseStorage.prototype.hasSimilarProduct.call({ supabase: failing } as any, "Moong Dal", "Haldiram"),
+    ).rejects.toThrow(/Duplicate check/);
+  });
+});

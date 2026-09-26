@@ -21,6 +21,12 @@
  * parser never invents a clean-looking name and never silently drops text
  * that may be an ingredient. (Two adversarial review rounds, 2026-09-26,
  * pin this with regression tests built from their reproductions.)
+ *
+ * KNOWN LIMIT (unchanged from the original parser): the named sub-ingredient
+ * list of a compound ingredient is not itemized — "Dark Chocolate Paste
+ * (Sugar, Cocoa Solids, Soy Lecithin)" yields "Dark Chocolate Paste". Coded
+ * additives inside it are still emitted. Itemizing sub-ingredients changes
+ * every product's list and the analysis budget: IMPROVEMENT_BACKLOG E1.
  */
 
 import {

@@ -159,11 +159,18 @@ export function buildCronRouter(
       // variant / word order) so the catalog never collects the same product
       // twice under slightly different OFF record names.
       products = await offService.fetchDailyProducts(COUNT, async (name, brand, barcode) => {
-        // Same barcode = same product, whatever the brand string says
-        if (barcode && (await getStorage().hasBarcode(barcode))) return true;
-        const existing = await getStorage().findByNameAndBrand(name, brand);
-        if (existing) return true;
-        return getStorage().hasSimilarProduct(name, brand);
+        try {
+          // Same barcode = same product, whatever the brand string says
+          if (barcode && (await getStorage().hasBarcode(barcode))) return true;
+          const existing = await getStorage().findByNameAndBrand(name, brand);
+          if (existing) return true;
+          return await getStorage().hasSimilarProduct(name, brand);
+        } catch (err) {
+          // Uniqueness unknown: skip this candidate (a later run retries it)
+          // rather than risk a duplicate or abort the whole run
+          console.warn(`[cron/daily-ingest] duplicate check failed for "${name}" — skipping:`, err instanceof Error ? err.message : err);
+          return true;
+        }
       });
     } catch (err) {
       console.error("[cron/daily-ingest] OFF fetch failed:", err);

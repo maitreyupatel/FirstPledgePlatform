@@ -52,3 +52,12 @@ describe("hasBarcode — the live Sprite duplicate (same barcode, brand 'sprite'
     expect(await hasBarcode("12")).toBe(false);
   });
 });
+
+describe("hasBarcode — fails closed", () => {
+  it("an unreadable table is an error, never 'no duplicate' (review 2026-09-26)", async () => {
+    const failing = {
+      from: () => ({ select: () => ({ ilike: () => ({ limit: async () => ({ data: null, error: { message: "timeout" } }) }) }) }),
+    };
+    await expect(SupabaseStorage.prototype.hasBarcode.call({ supabase: failing } as any, "8901764032912")).rejects.toThrow(/Duplicate check/);
+  });
+});

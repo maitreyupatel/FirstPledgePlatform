@@ -226,6 +226,9 @@ export class SupabaseStorage {
    * True when a product with this OFF barcode is already stored. The table
    * has no barcode column, but OFF image URLs encode it — the same barcode
    * under two brand strings ("sprite" / "Coca-Cola") is the same product.
+   * Throws when the lookup fails — "no duplicate" must never be the answer
+   * to an unreadable table (callers decide: the cron skips the candidate,
+   * the admin re-ingest writes nothing).
    */
   async hasBarcode(barcode: string, excludeId?: string): Promise<boolean> {
     const path = offImagePath(barcode);
@@ -233,7 +236,8 @@ export class SupabaseStorage {
     let query = this.supabase.from("products").select("id").ilike("image_url", `%/images/products/${escapeLike(path)}/%`);
     if (excludeId) query = query.neq("id", excludeId);
     const { data, error } = await query.limit(1);
-    return !error && !!data && data.length > 0;
+    if (error) throw new Error(`Duplicate check (barcode) failed: ${error.message}`);
+    return !!data && data.length > 0;
   }
 
   /** Admin view: recent runs with counts and per-product detail. */
@@ -271,7 +275,9 @@ export class SupabaseStorage {
     // A product must not count as its own duplicate (admin re-ingest of a draft)
     if (excludeId) query = query.neq("id", excludeId);
     const { data, error } = await query.limit(200);
-    if (error || !data) return false;
+    // Fail closed, like hasBarcode: an unreadable table is not "no duplicate"
+    if (error) throw new Error(`Duplicate check (similar name) failed: ${error.message}`);
+    if (!data) return false;
     return data.some((row: any) => sameBrand(String(row.brand)) && namesLookAlike(String(row.name), name));
   }
 
