@@ -7,6 +7,8 @@
  * Used for "food" and "supplement" product types — NOT for cosmetics (use EWG instead).
  */
 
+import { extractAdditiveCode } from "../utils/additiveCode";
+
 export interface FoodSafetyData {
   found: boolean;
   status: "safe" | "caution" | "banned" | null;
@@ -196,9 +198,8 @@ export class FoodSafetyService {
   // Negative lookbehind prevents "Vitamin E 400 IU" (a dosage, not an
   // additive code) from resolving to E400.
   private parseENumber(name: string): string | null {
-    const match = name.toLowerCase().match(/(?<!vitamin\s)\b(?:e|ins)[-\s]?(\d{3,4}[a-z]?)\b/);
-    if (match) return `e${match[1].replace(/\s/g, "")}`;
-    return null;
+    const code = extractAdditiveCode(name);
+    return code ? `e${code}` : null;
   }
 
   private lookupByENumber(eNumber: string): ENumberEntry | null {

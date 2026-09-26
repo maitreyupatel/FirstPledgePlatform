@@ -178,3 +178,39 @@ describe("write-boundary clamps", () => {
     expect(IngredientAnalysisService.clampConfidence(NaN)).toBe(0.5);
   });
 });
+
+describe("analysis cache — canonical keys and label wording (audit 2026-09-26, E4.7)", () => {
+  it("a cache hit shows THIS label's wording, not the stored lowercase key", async () => {
+    const { service, fakeAnalysisService, fakeProvider } = buildService();
+    fakeAnalysisService.getAnalysesBatch.mockResolvedValue(
+      new Map<string, IngredientAnalysis>([["sugar", freshStoredAnalysis("sugar")]]),
+    );
+
+    const [result] = await service.analyzeIngredients(["Sugar"], "cosmetic");
+
+    expect(fakeProvider.analyzeIngredient).not.toHaveBeenCalled();
+    expect(result.rationale).toBe("cached");
+    expect(result.name).toBe("Sugar");
+  });
+
+  it("one additive under two label wordings pays for ONE analysis, each keeping its wording", async () => {
+    const { service, fakeProvider } = buildService();
+
+    const results = await service.analyzeIngredients(
+      ["Preservative INS 211", "Preservative Sodium Benzoate INS 211"],
+      "food",
+    );
+
+    expect(fakeProvider.analyzeIngredient).toHaveBeenCalledTimes(1);
+    expect(results.map((r) => r.name)).toEqual(["Preservative INS 211", "Preservative Sodium Benzoate INS 211"]);
+    // Registry identity for INS 211 grounds both — same substance, same verdict
+    expect(results[0].status).toBe(results[1].status);
+  });
+
+  it("the stored cache key for a coded additive is its code", () => {
+    const normalize = IngredientAnalysisService.prototype.normalizeIngredientName;
+    expect(normalize.call(null, "PRESERVATIVE-E211")).toBe("ins 211");
+    expect(normalize.call(null, "Raising Agents INS 503(ii)")).toBe("ins 503");
+    expect(normalize.call(null, " Sugar ")).toBe("sugar");
+  });
+});

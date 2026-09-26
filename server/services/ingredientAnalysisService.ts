@@ -1,6 +1,7 @@
 import { createClient } from "@supabase/supabase-js";
 import type { IngredientAnalysis } from "./aiVettingService";
 import type { ProductType } from "@shared/types";
+import { canonicalIngredientKey } from "../utils/additiveCode";
 
 interface StoredAnalysis {
   id: string;
@@ -43,8 +44,9 @@ export class IngredientAnalysisService {
     this.refreshDays = refreshDays;
   }
 
+  /** Cache key: a coded additive keys on its code, everything else on its lowercased name. */
   normalizeIngredientName(name: string): string {
-    return name.toLowerCase().trim();
+    return canonicalIngredientKey(name);
   }
 
   /**

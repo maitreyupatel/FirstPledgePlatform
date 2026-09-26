@@ -8,6 +8,7 @@ import { GeminiProvider } from "./providers/geminiProvider";
 import { OpenAIProvider } from "./providers/openaiProvider";
 import { GroqProvider } from "./providers/groqProvider";
 import { CompoundResearchService } from "./providers/compoundResearchService";
+import { canonicalIngredientKey } from "../utils/additiveCode";
 
 export interface IngredientAnalysis {
   name: string;
@@ -109,7 +110,7 @@ export class AIVettingService {
   private inFlight = new Map<string, Promise<IngredientAnalysis>>();
 
   private analysisKey(ingredientName: string, productType: ProductType): string {
-    return `${ingredientName.toLowerCase().trim()}|${productType}`;
+    return `${canonicalIngredientKey(ingredientName)}|${productType}`;
   }
 
   async analyzeIngredient(ingredientName: string, productType: ProductType = "cosmetic"): Promise<IngredientAnalysis> {
@@ -118,7 +119,9 @@ export class AIVettingService {
       const storedAnalysis = await this.analysisService.getAnalysis(ingredientName, productType);
       if (storedAnalysis && !this.analysisService.shouldRefreshAnalysis(storedAnalysis)) {
         console.debug(`Using stored analysis for "${ingredientName}" (${productType})`);
-        return storedAnalysis;
+        // The row is keyed by canonical name ("ins 211", "sugar"); the
+        // report shows the label's own wording.
+        return { ...storedAnalysis, name: ingredientName };
       }
     }
 
@@ -418,10 +421,7 @@ export class AIVettingService {
       }
       await this.cacheResult(item.name, productType, result);
 
-      const key = this.analysisService
-        ? this.analysisService.normalizeIngredientName(item.name)
-        : item.name.toLowerCase().trim();
-      map.set(key, result);
+      map.set(canonicalIngredientKey(item.name), result);
     }
     return map;
   }
@@ -517,8 +517,7 @@ export class AIVettingService {
     // uncached ingredients in ONE model call, removing per-ingredient pacing
     // delays. Falls back to the sequential loop on any failure.
     if (process.env.BATCH_ANALYSIS === "true" && this.aiProvider instanceof GroqProvider) {
-      const keyOf = (n: string) =>
-        this.analysisService ? this.analysisService.normalizeIngredientName(n) : n.toLowerCase().trim();
+      const keyOf = canonicalIngredientKey;
       const seen = new Set<string>();
       const uncachedNames = ingredientNames.filter((n) => {
         const k = keyOf(n);
@@ -543,16 +542,17 @@ export class AIVettingService {
 
     for (let i = 0; i < ingredientNames.length; i++) {
       const name = ingredientNames[i];
-      const cacheKey = this.analysisService
-        ? this.analysisService.normalizeIngredientName(name)
-        : name.toLowerCase().trim();
+      const cacheKey = canonicalIngredientKey(name);
 
       const hit = cached.get(cacheKey);
       const isCacheHit = !!(hit && (!this.analysisService || !this.analysisService.shouldRefreshAnalysis(hit)));
 
       let analysis: IngredientAnalysis;
       if (isCacheHit) {
-        analysis = hit!;
+        // A hit is keyed by canonical name ("ins 211", "sugar") — possibly
+        // written by a product that worded it differently. Show THIS label's
+        // wording (was the lowercased key: "sugar" beside "Sugar", E4.7).
+        analysis = { ...hit!, name };
       } else {
         if (deadlineExceeded()) {
           throw new Error(`Analysis deadline exceeded after ${analyses.length}/${ingredientNames.length} ingredients — retry will resume from cache`);
