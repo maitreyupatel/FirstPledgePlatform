@@ -16,6 +16,7 @@ import { brandKey } from "../utils/nameSimilarity";
 import { ingestOutcome, ingestTriggerOf, type IngestJob } from "../services/ingestTelemetry";
 import { evaluatePublishGate, ingredientInputsFromAnalyses } from "../services/publishGate";
 import { analysisCacheKey } from "../utils/cacheKey";
+import { genericDeclarationVerdict } from "../services/genericDeclarations";
 import type { ProductType } from "@shared/types";
 
 function offSourceToProductType(source: "food" | "beauty"): ProductType {
@@ -350,7 +351,11 @@ export function buildCronRouter(
       const batch = (rows ?? []) as StaleRow[];
       for (const row of batch) {
         if (staleRows_.length >= fetchLimit) break;
-        if (analysisCacheKey(row.ingredient_name) === row.ingredient_name) staleRows_.push(row);
+        if (analysisCacheKey(row.ingredient_name) !== row.ingredient_name) continue;
+        // A generic declaration has a fixed verdict that is never cached, so
+        // its old row is never rewritten and would stay "oldest" for good
+        if (genericDeclarationVerdict(row.ingredient_name, row.product_type as ProductType)) continue;
+        staleRows_.push(row);
       }
       if (batch.length < PAGE) break; // no more stale rows
     }

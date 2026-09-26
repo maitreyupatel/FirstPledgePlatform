@@ -159,7 +159,8 @@ describe("ingredients are not lost or merged around brackets", () => {
     expect(parse("Cumin (Jeera) Seeds, Salt, Chilli")).toEqual(["Cumin Seeds", "Salt", "Chilli"]);
     expect(parse("Bengal Gram (Chana) Dal, Salt, Oil")).toEqual(["Bengal Gram Dal", "Salt", "Oil"]);
     expect(parse("Milk (Cow) Solids, Sugar")).toEqual(["Milk Solids", "Sugar"]);
-    expect(parse("Sugar, Artificial (Vanilla) Flavouring Substances")).toEqual(["Sugar", "Artificial Flavouring Substances"]);
+    // one ingredient — keeping the flavour's name, which FSSAI requires for artificial flavourings (E1.12)
+    expect(parse("Sugar, Artificial (Vanilla) Flavouring Substances")).toEqual(["Sugar", "Artificial Flavouring Substances - Vanilla"]);
   });
 
   it("a lost comma before a food word after a complete ingredient is held (R2-13)", () => {

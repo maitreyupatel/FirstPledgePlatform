@@ -107,7 +107,7 @@ products' ingredient lists).
 > (7 damaged/truncated labels, 12 generic-declaration holds — see E1.12);
 > 2 duplicates unpublished. Published 45 → 24. Details: IMPROVEMENTS.md S11.
 
-**E1.12 [agent/high] (NEW 2026-09-26 — next PR, owner-approved)** Generic
+**E1.12 [agent/high] ✅ DONE 2026-09-26 (PR stacked on #18)** Generic
 declarations FSSAI permits on labels — "Spices and Condiments", "Natural
 Flavouring Substances", "Nature Identical Flavouring Substances", "Seasoning"
 — get 0.2-confidence verdicts because the model will not rate an undisclosed
@@ -119,9 +119,33 @@ Fix: a deterministic registry verdict for generic declared categories
 ("caution — composition not disclosed; FSSAI permits generic declaration"),
 confident in the verdict itself, then re-ingest the 12 drafts. Never lower
 the gate threshold.
+> Evidence: fixed verdict (caution, 0.85, cites Labelling & Display Regs 2020
+> Reg. 5) only for a declaration the label leaves undisclosed — a listed
+> spice blend is itemized, a named flavour is kept ("… - Rose") and analyzed
+> as written; unnamed artificial flavours, bare "Flavours"/"Herbs"/
+> "Condiments" never match; computed, never cached (the cache is shared with
+> deployed code). Independent review found the parser collapsed listed
+> spices into the class (the verdict would have been false) — fixed before
+> any write. Re-ingest (dry run → apply, 0 mismatches): 9 drafts
+> republished incl. Mountain Dew; Thums up, Crunchex, Farali stay held
+> (name length, "Seasoning", fused "CARDAMOM NUTMEG"). Published 24 → 32.
+
+**E1.14 [agent/high] (NEW 2026-09-26)** Food products analyzed through the
+COSMETIC pipeline: EWG / "personal care" rationales on food ingredients.
+Found on 11 food products (3 published: Alpino, Sev Murmura, Heritage
+A-One — all three re-ingested through the food pipeline 2026-09-26; Alpino
+went to draft, its current label text is damaged). Root cause not yet
+identified (likely product_type "cosmetic"/"unknown" at analysis time, then
+corrected without re-analysis, or an OBF-sourced record). Add a guard: the
+admin type change must trigger re-analysis, and the gate should hold a food
+product whose rows cite EWG.
 
 **E1.13 [ops/low] (NEW 2026-09-26)** Catalog follow-ups from the repair:
-Alpino (published; current OFF text damaged — verify against the pack);
+Alpino (now draft: damaged OFF text + cosmetic-pipeline verdicts — verify
+against the pack, re-ingest with cleaned text); Thums up (held: its compliant
+flavour name makes a 67-char name — re-ingest with cleaned text); Crunchex
+("Seasoning" compound head scores 0.2 — E1.10); Farali Chivda (label fuses
+"CARDAMOM NUTMEG");
 Glow & Lovely draft = barcode duplicate with a doubled name; a THIRD Sprite
 draft ("Coca Cola", created 2026-09-26 by the unfixed cron on main); 36
 orphaned legacy-keyed cache rows (inert; optional cleanup).
