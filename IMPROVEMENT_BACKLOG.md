@@ -32,6 +32,21 @@ already rotated). Remediation, in order:
    leaked values worthless; scrubbing a public repo's history requires a
    coordinated force-push the owner must perform deliberately.
 
+> **Status 2026-08-28:** Triage corrected this item. Supabase service-role +
+> anon + Groq keys were ALREADY rotated (verified: leaked values ≠ live .env).
+> Gemini + Google keys STILL LIVE — rotation pending (user). Commit efeb01b
+> also leaked `client/.env`. Steps 2–3 done: gitleaks CI landed (see E0.3/E7.1),
+> `.env.example` created, scan validated non-vacuously (planted-secret probe).
+
+**E0.2 [verified/NEW 2026-08-28]** gitleaks full-history scan found a second
+live leak the audit missed: commit `e588cc1d` committed
+`.claude/settings.local.json` containing the **live CRON_SECRET** (still
+current at discovery). Exposure: anyone can invoke `/api/cron/*` — forced
+ingest runs and Groq-quota burn. **USER ACTION: rotate CRON_SECRET** (new
+value in Vercel env + local `.env`), then redeploy. File is gitignored now;
+recurrence is blocked by CI. Other scan hits triaged as false positives
+(docs placeholders) or already-rotated values (`setup-auth.js` history).
+
 ---
 
 ## E1 — Verdict correctness (the product IS the analyses)
