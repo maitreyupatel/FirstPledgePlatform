@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { createClient } from "@supabase/supabase-js";
 import { namesLookAlike } from "../utils/nameSimilarity.js";
+import { escapeLike } from "../utils/likeEscape.js";
 import {
   Ingredient,
   Product,
@@ -127,7 +128,7 @@ export class SupabaseStorage {
     const { data, error } = await this.supabase
       .from("products")
       .select("name")
-      .ilike("brand", brand.trim())
+      .ilike("brand", escapeLike(brand.trim()))
       .limit(25);
     if (error || !data) return false;
     return data.some((row: any) => namesLookAlike(String(row.name), name));
@@ -137,8 +138,8 @@ export class SupabaseStorage {
     const { data, error } = await this.supabase
       .from("products")
       .select("id, name, brand, status")
-      .ilike("name", name.trim())
-      .ilike("brand", brand.trim())
+      .ilike("name", escapeLike(name.trim()))
+      .ilike("brand", escapeLike(brand.trim()))
       .limit(1)
       .maybeSingle();
 

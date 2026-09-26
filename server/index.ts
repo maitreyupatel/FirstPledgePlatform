@@ -684,11 +684,24 @@ app.use(
 const publicDir = path.resolve(__dirname, "../dist/public");
 app.use(express.static(publicDir, { maxAge: "7d" }));
 
+// Unmatched /api/* must be JSON 404, never the SPA shell. Without this guard
+// the GET catch-all below answered 200 + index.html for any typo'd API path —
+// the exact silent-failure mode that once hid a broken cron.
+app.all("/api/*", (req, res) => {
+  res.status(404).json({
+    error: "Not found",
+    path: req.path,
+    method: req.method,
+  });
+});
+
 app.get("*", (_req, res) => {
   const indexPath = path.join(publicDir, "index.html");
   res.sendFile(indexPath, (err) => {
     if (err) {
-      res.status(200).send("<!doctype html><title>FirstPledge</title><div id=\"root\"></div>");
+      // index.html missing from the bundle is a broken deploy — say so.
+      // A 200 stub here once made a bad deploy look healthy.
+      res.status(500).send("<!doctype html><title>FirstPledge</title><p>Application bundle missing — deployment is broken.</p>");
     }
   });
 });

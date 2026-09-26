@@ -82,13 +82,15 @@ export async function apiRequest(
     credentials: "include",
   });
 
+  // Read the body at most once: a second res.text() throws "body stream
+  // already read", which used to mask every real server error message.
   if (!res.ok) {
-    const errorText = await res.text();
+    const errorText = (await res.text()) || res.statusText;
     console.error(`❌ API Error: ${res.status} ${res.statusText}`);
     console.error(`   Response: ${errorText}`);
+    throw new Error(`${res.status}: ${errorText}`);
   }
 
-  await throwIfResNotOk(res);
   return res;
 }
 
@@ -98,7 +100,18 @@ export const getQueryFn: <T>(options: {
 }) => QueryFunction<T> =
   ({ on401: unauthorizedBehavior }) =>
   async ({ queryKey }) => {
+    // Attach the same bearer token apiRequest sends. Without it, admin GETs
+    // (e.g. ?includeUnpublished=true) silently degrade to the public view —
+    // the server never 401s, it just hides drafts — so the Drafts tab showed
+    // 0 forever and draft products could not be opened for editing.
+    const headers: Record<string, string> = {};
+    const token = await getAuthToken();
+    if (token) {
+      headers["Authorization"] = `Bearer ${token}`;
+    }
+
     const res = await fetch(queryKey.join("/") as string, {
+      headers,
       credentials: "include",
     });
 

@@ -1,5 +1,31 @@
 # IMPROVEMENTS.md — Audit Log
 
+# Session 10 (cont.): Phase 1 — stop active damage (2026-08-28)
+
+Six verified fixes, each with regression tests. 153/153 tests (16 new), tsc
+clean, E4.8 live-probed on a local boot against the prod DB.
+
+- **E2.1 (CRITICAL)**: getQueryFn now attaches the Supabase bearer — the admin
+  Drafts tab could never see drafts and draft editing 404'd end-to-end (the
+  server silently degrades to the public view rather than 401ing). First
+  client-side tests in the repo (tests/client/queryClient.test.ts).
+- **E2.2**: apiRequest read error bodies twice — every API error surfaced as
+  "body stream already read" instead of the server's message. Single-read now.
+- **E2.3**: Publish on a brand-new unsaved product PATCHed
+  /api/products/undefined; now POSTs a create with status published.
+- **E1.1**: found-but-scoreless EWG hits no longer inflate blind cosmetic
+  verdicts to 0.9 (which skipped verification + publish gates). Confidence
+  keys on derived status, AND both EWG parsers clamp scores BEFORE deriving
+  `found` (root cause — a page containing "score: 85" produced the
+  contradictory found=true/score=null).
+- **E4.1**: refresh-stale cron now derives row limit (11 vs 5) and elapsed
+  guard (160s vs 45s) from CRON_BUDGET_MS=280000 — ~2x weekly drain of the
+  419-row stale backlog, worst-case-latency-aware so no mid-write kills.
+- **E4.5**: LIKE metachars escaped in dedup lookups ("100% Whole Wheat" can
+  no longer wildcard-match and get skipped forever).
+- **E4.8**: unmatched /api/* now 404 JSON (was 200 + SPA shell — the failure
+  mode that once hid a broken cron); missing-bundle fallback now 500, not 200.
+
 # Session 10: Backlog v2 Phase 0 — E0 security incident + CI guardrail (2026-08-28)
 
 Plan-first session over IMPROVEMENT_BACKLOG.md (E0–E7). A 5-agent read-only

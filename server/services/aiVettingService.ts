@@ -329,7 +329,11 @@ export class AIVettingService {
       description: aiAnalysis.description || this.buildDefaultDescription(ingredientName, finalStatus),
       edgeCases: aiAnalysis.edgeCases || this.buildDefaultEdgeCases(ingredientName, finalStatus),
       sourceUrl: ewgData.url,
-      confidence: ewgData.found ? 0.9 : (aiAnalysis.confidence || 0.5),
+      // High confidence only when a usable EWG score backs the verdict —
+      // found-but-scoreless must NOT inflate a blind AI verdict to 0.9, or it
+      // skips the verification gate and sails past the publish gates (the
+      // food path and the batch path already key on authoritative status).
+      confidence: status ? 0.9 : (aiAnalysis.confidence || 0.5),
       ewgScore: ewgData.score,
       productType,
       researchSources: researchSources.length > 0 ? researchSources : undefined,

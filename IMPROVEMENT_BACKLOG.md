@@ -51,11 +51,14 @@ recurrence is blocked by CI. Other scan hits triaged as false positives
 
 ## E1 — Verdict correctness (the product IS the analyses)
 
-**E1.1 [agent/high]** Cosmetic pipeline grants 0.9 confidence when EWG is
+**E1.1 [agent/high] ✅ DONE 2026-08-28** Cosmetic pipeline grants 0.9 confidence when EWG is
 found-but-scoreless (`aiVettingService.ts:332` keys on `found`, not a usable
 score; `ewgService.ts:133-156` lets found=true/score=null exist) — blind AI
 verdicts skip the verification gate and auto-publish. The food path was
 hardened against exactly this; the cosmetic path was not. Fix + regression test.
+> Evidence: confidence now keys on derived EWG status (mirrors food/batch
+> paths) AND both EWG parsers clamp before deriving `found` (root cause).
+> 6 regression tests in tests/server/phase1-regressions.test.ts.
 
 **E1.2 [verified/critical-class]** The draft "Amul cheese" **banned** verdict
 is factually wrong and cites a fabricated regulation (FSSAI permits class II
@@ -95,19 +98,24 @@ products' ingredient lists).
 
 ## E2 — Admin & client correctness
 
-**E2.1 [verified/CRITICAL]** The default React Query fetcher
+**E2.1 [verified/CRITICAL] ✅ DONE 2026-08-28** The default React Query fetcher
 (`queryClient.ts:96-111 getQueryFn`) never attaches the Supabase bearer —
 only `apiRequest` does. The admin Drafts tab therefore ALWAYS shows 0 and
 draft products cannot be opened for editing. This is why the 14-draft backlog
 accumulated: **the UI cannot see drafts.** Fix the fetcher to attach the
 token; then actually triage the drafts (E3.6).
+> Evidence: getQueryFn now attaches getAuthToken() bearer; unit-tested in
+> tests/client/queryClient.test.ts (first client tests in the repo).
 
-**E2.2 [agent/high]** `apiRequest` reads the response body twice
+**E2.2 [agent/high] ✅ DONE 2026-08-28** `apiRequest` reads the response body twice
 (`res.text()` at :86 then `throwIfResNotOk` reads again) — every API error
 surfaces as "body stream already read" instead of the server's message.
+> Evidence: single read; regression test proves "404: <server body>" surfaces.
 
-**E2.3 [agent/high]** Publish button on a brand-new unsaved product issues
+**E2.3 [agent/high] ✅ DONE 2026-08-28** Publish button on a brand-new unsaved product issues
 `PATCH /api/products/undefined`.
+> Evidence: create-mode publish now POSTs /api/products with status:published
+> (productCreateSchema already accepts status).
 
 **E2.4 [agent/medium]** No error branches on the three list pages — fetch
 failures render as empty/zero states (looks like an empty catalog).
@@ -164,10 +172,13 @@ render. Surface them.
 
 ## E4 — Pipeline throughput & robustness
 
-**E4.1 [agent/high]** `refresh-stale-ingredients` ignores the platform
+**E4.1 [agent/high] ✅ DONE 2026-08-28** `refresh-stale-ingredients` ignores the platform
 budget: hardcoded 45s guard + LIMIT 5 while `CRON_BUDGET_MS=280000` exists
 (`cron.ts:275,298`). Two-line fix ≈ 5x backlog drain. (Direct cause of the
 419-row stale backlog.)
+> Evidence: computeRefreshBudget() derives limit 11 + 160s guard from the
+> 280s prod budget (worst-case-latency-aware, unit-tested). File was
+> server/routes/cron.ts, not server/cron.ts. Stale 60s-era comments cleaned.
 
 **E4.2 [agent/high]** Interactive `/api/vet-ingredients` inherits
 `AI_CALL_DELAY_MS=20000` from vercel.json and has NO deadline — >14 uncached
@@ -184,9 +195,11 @@ left but worst-case single-ingredient latency is ~90s+ (45s compound + 45s
 verification + retries) — the "never killed mid-write" guarantee can break.
 Raise the start-buffer / propagate deadline into compound timeouts.
 
-**E4.5 [agent/medium]** `ilike` with unescaped `%`/`_` in
+**E4.5 [agent/medium] ✅ DONE 2026-08-28** `ilike` with unescaped `%`/`_` in
 findByNameAndBrand/hasSimilarProduct — "100% Real..." names act as wildcards
 and can false-positive checkExists (product skipped forever). Escape metachars.
+> Evidence: escapeLike() in server/utils/likeEscape.ts, applied at all 3
+> ilike call sites; unit-tested.
 
 **E4.6 [agent/medium]** GroqProvider hops to fallback models on EVERY error
 (not just model-availability) and sticks the downgrade for the lambda
@@ -196,9 +209,11 @@ lifetime. Scope fallback to 404/decommission errors; don't persist.
 catalogs mix "Sodium Chloride" and "sodium chloride". Preserve display casing
 (store original label casing alongside the normalized key).
 
-**E4.8 [agent/medium]** Unknown `GET /api/*` returns 200 + index.html via the
+**E4.8 [agent/medium] ✅ DONE 2026-08-28** Unknown `GET /api/*` returns 200 + index.html via the
 SPA catch-all — the exact silent-failure mode that hid a broken cron once.
 Return 404 JSON for unmatched /api/* before the catch-all.
+> Evidence: app.all("/api/*") 404 guard + missing-index.html fallback now 500
+> (was silent 200). Live-probed locally; supertest regression test.
 
 **E4.9 [agent/medium]** Per-lambda in-memory state that silently doesn't hold
 on Vercel: CSE quota counter, circuit breaker, vet rate limiter. Document or

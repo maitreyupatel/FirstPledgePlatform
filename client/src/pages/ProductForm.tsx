@@ -452,10 +452,16 @@ export default function ProductForm() {
         // Then merge the draft into the original
         const response = await apiRequest("POST", `/api/products/${productId}/merge`, {});
         return response.json();
-      } else {
+      } else if (productId) {
         // Regular publish - just update status
         const payload = { ...values, ingredients, status: "published" };
         const response = await apiRequest("PATCH", `/api/products/${productId}`, payload);
+        return response.json();
+      } else {
+        // Brand-new unsaved product: create it directly as published.
+        // Without this branch the request went to PATCH /api/products/undefined.
+        const payload = { ...values, ingredients, status: "published" };
+        const response = await apiRequest("POST", "/api/products", payload);
         return response.json();
       }
     },
