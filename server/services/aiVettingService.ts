@@ -117,13 +117,12 @@ export class AIVettingService {
   }
 
   async analyzeIngredient(ingredientName: string, productType: ProductType = "cosmetic"): Promise<IngredientAnalysis> {
-    // A generic label declaration has a fixed verdict (E1.12) — ahead of the
-    // cache, so a stale AI row for it (scored ~0.2) is replaced, not served
+    // A generic label declaration has a fixed verdict (E1.12), checked ahead
+    // of the cache so a stale AI row for it (scored ~0.2) is never served.
+    // Computed, never cached: the cache is shared with deployed code that
+    // predates this rule, and must not change that code's verdicts.
     const generic = genericDeclarationVerdict(ingredientName, productType);
-    if (generic) {
-      await this.cacheResult(ingredientName, productType, generic);
-      return generic;
-    }
+    if (generic) return generic;
 
     // Step 0: Check permanent storage (cache key is ingredient_name + product_type)
     if (this.analysisService) {
@@ -580,7 +579,6 @@ export class AIVettingService {
 
     const analyses: IngredientAnalysis[] = [];
 
-    const genericWritten = new Set<string>();
     for (let i = 0; i < ingredientNames.length; i++) {
       const name = ingredientNames[i];
       const cacheKey = analysisCacheKey(name);
@@ -592,13 +590,10 @@ export class AIVettingService {
 
       let analysis: IngredientAnalysis;
       if (generic) {
-        // Fixed verdict (E1.12), ahead of the cache: a stale AI row for it
-        // (scored ~0.2) is replaced once per key, not served
+        // Fixed verdict (E1.12), ahead of the cache so a stale AI row for it
+        // (scored ~0.2) is never served; computed, never cached (see
+        // analyzeIngredient)
         analysis = generic;
-        if (!genericWritten.has(cacheKey)) {
-          genericWritten.add(cacheKey);
-          await this.cacheResult(name, productType, generic);
-        }
       } else if (isCacheHit) {
         // A hit is keyed by canonical name ("ins 211", "sugar") — possibly
         // written by a product that worded it differently. Show THIS label's

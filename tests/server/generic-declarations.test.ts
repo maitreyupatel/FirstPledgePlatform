@@ -106,14 +106,21 @@ function buildService() {
 }
 
 describe("analysis pipeline — generic declarations", () => {
-  it("replaces a stale 0.2 cache row instead of serving it, with no AI call and no pacing", async () => {
-    const { service, rows, provider, sleep } = buildService();
+  it("never serves a stale 0.2 cache row, with no AI call and no pacing", async () => {
+    const { service, provider, sleep } = buildService();
     const [a, b] = await service.analyzeIngredients(["Spices and Condiments", "Natural Flavouring Substances"], "food");
     expect(provider.analyzeIngredient).not.toHaveBeenCalled();
     expect(sleep).not.toHaveBeenCalled();
     expect([a.status, a.confidence, a.name]).toEqual(["caution", 0.85, "Spices and Condiments"]);
     expect(b.name).toBe("Natural Flavouring Substances");
-    expect(rows.get("spices and condiments")?.confidence).toBe(0.85);
+  });
+
+  it("is never written to the shared cache — deployed code predating the rule reads it", async () => {
+    const { service, rows, store } = buildService();
+    await service.analyzeIngredients(["Spices and Condiments", "Mixed Spices"], "food");
+    await service.analyzeIngredient("Natural Flavouring Substances", "food");
+    expect(store.upsertAnalysis).not.toHaveBeenCalled();
+    expect(rows.get("spices and condiments")?.confidence).toBe(0.2); // untouched
   });
 
   it("the single-ingredient path (refresh cron) takes the fixed verdict too", async () => {
